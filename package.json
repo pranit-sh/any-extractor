@@ -1,0 +1,43 @@
+{
+  "name": "any-extractor",
+  "version": "1.0.0",
+  "description": "A universal extractor for any file type.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --dts --format esm,cjs --out-dir dist"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/concat-stream": "^2.0.3",
+    "@types/js-yaml": "^4.0.9",
+    "@types/mime-types": "^2.1.4",
+    "@types/node": "^22.14.0",
+    "@types/pdf-parse": "^1.1.5",
+    "@types/yauzl": "^2.10.3",
+    "eslint": "^9.24.0",
+    "prettier": "^3.5.3",
+    "ts-node": "^10.9.2",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "^0.9.8",
+    "axios": "^1.8.4",
+    "concat-stream": "^2.0.0",
+    "file-type": "^20.4.1",
+    "js-yaml": "^4.1.0",
+    "pdf-parse": "^1.1.1",
+    "undici": "^7.8.0",
+    "yauzl": "^3.2.0"
+  }
+}
