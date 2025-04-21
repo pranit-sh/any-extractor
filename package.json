@@ -34,7 +34,7 @@
     "@xmldom/xmldom": "^0.9.8",
     "axios": "^1.8.4",
     "concat-stream": "^2.0.0",
-    "file-type": "^20.4.1",
+    "file-type-mime": "^0.4.6",
     "js-yaml": "^4.1.0",
     "pdf-parse": "^1.1.1",
     "undici": "^7.8.0",

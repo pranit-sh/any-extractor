@@ -1,13 +1,14 @@
-import { readFile as read } from 'node:fs/promises';
 import { fetch } from 'undici';
 import yauzl from 'yauzl';
 import { ERRORMSG } from './constant';
 import { ExtractedFile } from './types';
 import concat from 'concat-stream';
 import { DOMParser } from '@xmldom/xmldom';
+import { promises as fs } from 'fs';
 
-export const readFile = async (filePath: string): Promise<Buffer> =>
-  (await read(filePath)) as unknown as Buffer;
+export async function readFile(filePath: string): Promise<Buffer> {
+  return await fs.readFile(filePath);
+}
 
 export const readFileUrl = async (url: string): Promise<Buffer> => {
   const res = await fetch(url);
@@ -66,3 +67,13 @@ export const parseString = (xml: string) => {
   let parser = new DOMParser();
   return parser.parseFromString(xml, "text/xml");
 };
+
+export function isValidUrl(str: string | undefined | null): boolean {
+	try {
+		if (!str) return false;
+    const url = new URL(str);
+		return true;
+	} catch (_) {
+		return false;
+	}
+}

@@ -1,6 +1,6 @@
-import { AnyParserMethod, ExtractionPayload } from "../types"
-import { readFileUrl, readFile } from "../util"
-import { fileTypeFromBuffer as getFileType } from 'file-type'
+import { parse } from "file-type-mime";
+import { AnyParserMethod } from "../types"
+import { isValidUrl, readFile, readFileUrl } from "../util";
 
 export class AnyExtractor {
 	private parserMap: Map<string, AnyParserMethod> = new Map();
@@ -18,25 +18,25 @@ export class AnyExtractor {
 		return Array.from(this.parserMap.keys());
 	}
 
-	public extractText = async ({ input, type }: ExtractionPayload): Promise<string> => {
+	public extractText = async (input: string | Buffer): Promise<string> => {
 		let preparedInput: Buffer;
 		if (typeof input === 'string') {
-			switch (type) {
-				case 'file':
-					preparedInput = await readFile(input);
-					break;
-				case 'fileurl':
-					preparedInput = await readFileUrl(input);
-					break;
-				default:
-					preparedInput = Buffer.from(input);
+			if (isValidUrl(input)) {
+				preparedInput = await readFileUrl(input);
+			} else {
+				preparedInput = await readFile(input);
 			}
 		} else {
 			preparedInput = input;
 		}
+		if (!preparedInput) {
+			throw new Error("AnyExtractor: No input provided");
+		}
 
-		const mimeDetails = await getFileType(preparedInput);
-		if (!mimeDetails) return preparedInput.toString('utf-8');
+		const mimeDetails = parse(preparedInput.buffer.slice(preparedInput.byteOffset, preparedInput.byteOffset + preparedInput.byteLength) as ArrayBuffer);
+		if (!mimeDetails) {
+			return preparedInput.toString('utf-8');
+		}
 
 		const extractor = this.parserMap.get(mimeDetails.mime);
 
