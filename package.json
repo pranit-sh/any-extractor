@@ -15,7 +15,15 @@
     "lint": "eslint .",
     "lint:check": "eslint . --no-error-on-unmatched-pattern",
     "format": "prettier --write 'src/**/*.{ts,js,json,md}'",
-    "build": "tsup src/index.ts --dts --format esm,cjs --out-dir dist"
+    "build": "tsup src/index.ts --dts --format esm,cjs --out-dir dist",
+    "prepare": "husky install"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx,json,css,scss,md}": [
+      "prettier --write",
+      "eslint --fix",
+      "git add"
+    ]
   },
   "keywords": [
     "text extraction",
@@ -28,7 +36,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/pranit-sh/any-extractor.git"
+    "url": "git+https://github.com/pranit-sh/any-extractor.git"
   },
   "bugs": {
     "url": "https://github.com/pranit-sh/any-extractor/issues"
@@ -62,13 +70,16 @@
     "prettier": "^3.5.3",
     "semantic-release": "^24.2.3",
     "ts-node": "^10.9.2",
-    "tsup": "^8.4.0"
+    "tsup": "^8.4.0",
+    "husky": "^8.0.0"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.8",
     "concat-stream": "^2.0.0",
     "file-type-mime": "^0.4.6",
+    "husky": "^9.1.7",
     "js-yaml": "^4.1.0",
+    "lint-staged": "^15.5.1",
     "pdf-parse": "^1.1.1",
     "tesseract.js": "^6.0.1",
     "undici": "^7.8.0",

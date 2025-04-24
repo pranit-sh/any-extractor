@@ -8,7 +8,8 @@ export class PDFParser implements AnyParserMethod {
     try {
       const data = await pdf(file);
       const textContent = data.text;
-      return textContent;
+      return  textContent;
+
     } catch (error) {
       console.error('Error parsing PDF file:', error);
       throw error;
