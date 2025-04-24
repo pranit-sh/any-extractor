@@ -37,7 +37,7 @@ export class AnyExtractor {
 
   public extractText = async (
     input: string | Buffer,
-    extractingOptions: ExtractingOptions
+    extractingOptions: ExtractingOptions,
   ): Promise<string> => {
     let preparedInput: Buffer;
     if (typeof input === 'string') {
