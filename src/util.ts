@@ -14,9 +14,12 @@ export const readFileUrl = async (url: string): Promise<Buffer> => {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to fetch: ${res.statusText}`);
   return Buffer.from(await res.arrayBuffer());
-}
+};
 
-export const extractFiles = (zipInput: Buffer | string, filterFn: (x: string) => boolean): Promise<ExtractedFile[]> => {
+export const extractFiles = (
+  zipInput: Buffer | string,
+  filterFn: (x: string) => boolean,
+): Promise<ExtractedFile[]> => {
   return new Promise((res, rej) => {
     const processZipfile = (zipfile: yauzl.ZipFile) => {
       const extractedFiles: ExtractedFile[] = [];
@@ -25,20 +28,19 @@ export const extractFiles = (zipInput: Buffer | string, filterFn: (x: string) =>
       function processEntry(entry: yauzl.Entry) {
         if (filterFn(entry.fileName)) {
           zipfile.openReadStream(entry, (err, readStream) => {
-            if (err)
-              return rej(err);
+            if (err) return rej(err);
 
-            readStream.pipe(concat((data: Buffer) => {
-              extractedFiles.push({
-              path: entry.fileName,
-              content: data.toString()
-              });
-              zipfile.readEntry();
-            }));
+            readStream.pipe(
+              concat((data: Buffer) => {
+                extractedFiles.push({
+                  path: entry.fileName,
+                  content: data,
+                });
+                zipfile.readEntry();
+              }),
+            );
           });
-        }
-        else
-          zipfile.readEntry();
+        } else zipfile.readEntry();
       }
 
       zipfile.on('entry', processEntry);
@@ -51,29 +53,26 @@ export const extractFiles = (zipInput: Buffer | string, filterFn: (x: string) =>
         if (err) return rej(err);
         processZipfile(zipfile);
       });
-    }
-    else if (typeof zipInput === 'string') {
+    } else if (typeof zipInput === 'string') {
       yauzl.open(zipInput, { lazyEntries: true }, (err, zipfile) => {
         if (err) return rej(err);
         processZipfile(zipfile);
       });
-    }
-    else
-      rej(ERRORMSG.invalidInput);
+    } else rej(ERRORMSG.invalidInput);
   });
-}
+};
 
 export const parseString = (xml: string) => {
-  let parser = new DOMParser();
-  return parser.parseFromString(xml, "text/xml");
+  const parser = new DOMParser();
+  return parser.parseFromString(xml, 'text/xml');
 };
 
 export function isValidUrl(str: string | undefined | null): boolean {
-	try {
-		if (!str) return false;
-    const url = new URL(str);
-		return true;
-	} catch (_) {
-		return false;
-	}
+  try {
+    if (!str) return false;
+    new URL(str);
+    return true;
+  } catch {
+    return false;
+  }
 }

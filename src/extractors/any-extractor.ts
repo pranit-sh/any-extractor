@@ -1,50 +1,82 @@
-import { parse } from "file-type-mime";
-import { AnyParserMethod } from "../types"
-import { isValidUrl, readFile, readFileUrl } from "../util";
+import { parse } from 'file-type-mime';
+import {
+  AnyParserMethod,
+  ExtractingOptions,
+  ExtractorConfig,
+  SupportedOCRLanguage,
+} from '../types';
+import { isValidUrl, readFile, readFileUrl } from '../util';
 
 export class AnyExtractor {
-	private parserMap: Map<string, AnyParserMethod> = new Map();
-	private parsers: AnyParserMethod[] = [];
+  private extractorConfig: ExtractorConfig = {
+    llmProvider: 'openai',
+    visionModel: '',
+    apikey: '',
+  };
 
-	public addParser = (method: AnyParserMethod): this => {
-		this.parsers.push(method);
-		method.mimes.forEach((mime) => {
-			this.parserMap.set(mime, method);
-		});
-		return this;
-	}
+  constructor(extractorConfig?: ExtractorConfig) {
+    if (extractorConfig) {
+      this.extractorConfig = extractorConfig;
+    }
+  }
 
-	public getRegisteredParsers = (): string[] => {
-		return Array.from(this.parserMap.keys());
-	}
+  private mimeParserMap: Map<string, AnyParserMethod> = new Map();
+  private parsers: AnyParserMethod[] = [];
 
-	public extractText = async (input: string | Buffer): Promise<string> => {
-		let preparedInput: Buffer;
-		if (typeof input === 'string') {
-			if (isValidUrl(input)) {
-				preparedInput = await readFileUrl(input);
-			} else {
-				preparedInput = await readFile(input);
-			}
-		} else {
-			preparedInput = input;
-		}
-		if (!preparedInput) {
-			throw new Error("AnyExtractor: No input provided");
-		}
+  public addParser = (method: AnyParserMethod): this => {
+    this.parsers.push(method);
+    method.mimes.forEach((mime) => {
+      this.mimeParserMap.set(mime, method);
+    });
+    return this;
+  };
 
-		const mimeDetails = parse(preparedInput.buffer.slice(preparedInput.byteOffset, preparedInput.byteOffset + preparedInput.byteLength) as ArrayBuffer);
-		if (!mimeDetails) {
-			return preparedInput.toString('utf-8');
-		}
+  public getRegisteredParsers = (): string[] => {
+    return Array.from(this.mimeParserMap.keys());
+  };
 
-		const extractor = this.parserMap.get(mimeDetails.mime);
+  public extractText = async (
+    input: string | Buffer,
+    extractImages: boolean = false,
+    imageExtractionMethod: 'ocr' | 'llm' = 'ocr',
+    language: SupportedOCRLanguage = 'eng',
+  ): Promise<string> => {
+    let preparedInput: Buffer;
+    if (typeof input === 'string') {
+      if (isValidUrl(input)) {
+        preparedInput = await readFileUrl(input);
+      } else {
+        preparedInput = await readFile(input);
+      }
+    } else {
+      preparedInput = input;
+    }
+    if (!preparedInput) {
+      throw new Error('AnyExtractor: No input provided');
+    }
 
-		if (!extractor?.apply) {
-			const message = `AnyExtractor: No extraction method registered for MIME type '${mimeDetails.mime}'`;
-			throw new Error(message);
-		}
+    const mimeDetails = parse(
+      preparedInput.buffer.slice(
+        preparedInput.byteOffset,
+        preparedInput.byteOffset + preparedInput.byteLength,
+      ) as ArrayBuffer,
+    );
+    if (!mimeDetails) {
+      return preparedInput.toString('utf-8');
+    }
+    console.log(`AnyExtractor: Detected MIME type: ${mimeDetails.mime}`);
+    const extractor = this.mimeParserMap.get(mimeDetails.mime);
 
-		return extractor.apply(preparedInput)
-	}
+    if (!extractor?.apply) {
+      const message = `AnyExtractor: No extraction method registered for MIME type '${mimeDetails.mime}'`;
+      throw new Error(message);
+    }
+
+    return extractor.apply(
+      preparedInput,
+      mimeDetails.mime,
+      { extractImages, imageExtractionMethod, language } as ExtractingOptions,
+      this.extractorConfig,
+    );
+  };
 }

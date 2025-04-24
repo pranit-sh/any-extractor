@@ -1,111 +1,185 @@
-import { Element, LiveNodeList } from "@xmldom/xmldom";
-import { ERRORMSG } from "../constant";
-import { AnyParserMethod } from "../types";
-import { extractFiles, parseString } from "../util";
+import { Element } from '@xmldom/xmldom';
+import { ERRORMSG } from '../constant';
+import { AnyParserMethod, ExtractingOptions } from '../types';
+import { extractFiles, parseString } from '../util';
+import { AnyExtractor } from '../extractors/any-extractor';
 
 export class ExcelParser implements AnyParserMethod {
-  mimes = ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
+  mimes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
 
-  async apply(file: Buffer): Promise<string> {
-    const sheetsRegex = /xl\/worksheets\/sheet\d+.xml/g;
-    const drawingsRegex = /xl\/drawings\/drawing\d+.xml/g;
-    const chartsRegex = /xl\/charts\/chart\d+.xml/g;
-    const stringsFilePath = 'xl/sharedStrings.xml';
+  private anyExtractor: AnyExtractor;
+  constructor(anyExtractor: AnyExtractor) {
+    this.anyExtractor = anyExtractor;
+  }
+
+  async apply(file: Buffer, _: string, extractingOptions: ExtractingOptions): Promise<string> {
+    const patterns = {
+      sheets: /xl\/worksheets\/sheet\d+.xml/g,
+      drawings: /xl\/drawings\/drawing\d+.xml/g,
+      charts: /xl\/charts\/chart\d+.xml/g,
+      sharedStrings: 'xl/sharedStrings.xml',
+      images: /xl\/media\/image\d+\.(png|jpeg|jpg|webp)/g,
+    };
 
     try {
-      const files = await extractFiles(file, x =>
-        [sheetsRegex, drawingsRegex, chartsRegex].some(fileRegex => x.match(fileRegex)) || x == stringsFilePath
+      const files = await extractFiles(
+        file,
+        (path) =>
+          [patterns.sheets, patterns.drawings, patterns.charts, patterns.images].some((regex) =>
+            regex.test(path),
+          ) || path === patterns.sharedStrings,
       );
 
-      if (files.length == 0 || !files.map(file => file.path).some(filename => filename.match(sheetsRegex))) {
-        throw ERRORMSG.fileCorrupted("TODO: figure this out");
+      if (files.length === 0 || !files.some((file) => patterns.sheets.test(file.path))) {
+        throw ERRORMSG.fileCorrupted('Missing or corrupted sheet files.');
       }
 
-      const xmlContentFilesObject = {
-        sheetFiles: files.filter(file => file.path.match(sheetsRegex)).map(file => file.content),
-        drawingFiles: files.filter(file => file.path.match(drawingsRegex)).map(file => file.content),
-        chartFiles: files.filter(file => file.path.match(chartsRegex)).map(file => file.content),
-        sharedStringsFile: files.filter(file => file.path == stringsFilePath).map(file => file.content)[0],
+      const xmlContent = {
+        sheets: files
+          .filter((file) => patterns.sheets.test(file.path))
+          .map((file) => file.content.toString()),
+        drawings: files
+          .filter((file) => patterns.drawings.test(file.path))
+          .map((file) => file.content.toString()),
+        charts: files
+          .filter((file) => patterns.charts.test(file.path))
+          .map((file) => file.content.toString()),
+        sharedStrings: files
+          .find((file) => file.path === patterns.sharedStrings)
+          ?.content.toString(),
+        images: files.filter((file) => patterns.images.test(file.path)),
       };
 
-      let responseText: string[] = [];
+      const sharedStrings = this.parseSharedStrings(xmlContent.sharedStrings);
 
-      function isValidInlineStringCNode(cNode: Element): boolean {
-        if (cNode.tagName.toLowerCase() != 'c') return false;
-        if (cNode.getAttribute("t") != 'inlineStr') return false;
-        const childNodesNamedIs: LiveNodeList<Element> = cNode.getElementsByTagName('is');
-        if (childNodesNamedIs.length != 1) return false;
-        const childNodesNamedT: LiveNodeList<Element> = childNodesNamedIs[0].getElementsByTagName('t');
-        if (childNodesNamedT.length != 1) return false;
-        return childNodesNamedT[0].childNodes[0] && childNodesNamedT[0].childNodes[0].nodeValue != '';
-      }
+      const orderedText = files
+        .map(async (file) => {
+          if (patterns.sheets.test(file.path)) {
+            return this.extractSheetText([file.content.toString()], sharedStrings);
+          } else if (patterns.drawings.test(file.path)) {
+            return this.extractDrawingText([file.content.toString()]);
+          } else if (patterns.charts.test(file.path)) {
+            return this.extractChartText([file.content.toString()]);
+          } else if (patterns.images.test(file.path)) {
+            return await this.extractImageText([file], extractingOptions);
+          }
+          return null;
+        })
+        .filter(Boolean);
 
-      function hasValidVNodeInCNode(cNode: Element): boolean {
-        const vNodes = cNode.getElementsByTagName("v");
-        return vNodes[0] && vNodes[0].childNodes[0] && vNodes[0].childNodes[0].nodeValue != '';
-      }
-
-      const sharedStringsXmlTNodesList = xmlContentFilesObject.sharedStringsFile != undefined
-        ? parseString(xmlContentFilesObject.sharedStringsFile).getElementsByTagName("t")
-        : [];
-
-      const sharedStrings = Array.from(sharedStringsXmlTNodesList)
-        .map(tNode => tNode.childNodes[0]?.nodeValue ?? '');
-
-      for (const sheetXmlContent of xmlContentFilesObject.sheetFiles) {
-        const sheetsXmlCNodesList = parseString(sheetXmlContent).getElementsByTagName("c");
-        responseText.push(
-          Array.from(sheetsXmlCNodesList)
-            .filter(cNode => isValidInlineStringCNode(cNode) || hasValidVNodeInCNode(cNode))
-            .map(cNode => {
-              if (isValidInlineStringCNode(cNode))
-                return cNode.getElementsByTagName('is')[0].getElementsByTagName('t')[0].childNodes[0].nodeValue;
-              if (hasValidVNodeInCNode(cNode)) {
-                const isIndexInSharedStrings = cNode.getAttribute("t") == "s";
-                const value = parseInt(cNode.getElementsByTagName("v")[0].childNodes[0].nodeValue ?? "", 10);
-                if (isIndexInSharedStrings && value >= sharedStrings.length)
-                  throw ERRORMSG.fileCorrupted("TODO: figure this out");
-
-                return isIndexInSharedStrings
-                  ? sharedStrings[value]
-                  : value;
-              }
-              return '';
-            })
-            .join("\n")
-        );
-      }
-
-      for (const drawingXmlContent of xmlContentFilesObject.drawingFiles) {
-        const drawingsXmlParagraphNodesList = parseString(drawingXmlContent).getElementsByTagName("a:p");
-        responseText.push(
-          Array.from(drawingsXmlParagraphNodesList)
-            .filter(paragraphNode => paragraphNode.getElementsByTagName("a:t").length != 0)
-            .map(paragraphNode => {
-              const xmlTextNodeList = paragraphNode.getElementsByTagName("a:t");
-              return Array.from(xmlTextNodeList)
-                .filter(textNode => textNode.childNodes[0] && textNode.childNodes[0].nodeValue)
-                .map(textNode => textNode.childNodes[0].nodeValue)
-                .join("");
-            })
-            .join("\n")
-        );
-      }
-
-      for (const chartXmlContent of xmlContentFilesObject.chartFiles) {
-        const chartsXmlCVNodesList = parseString(chartXmlContent).getElementsByTagName("c:v");
-        responseText.push(
-          Array.from(chartsXmlCVNodesList)
-            .filter(cVNode => cVNode.childNodes[0] && cVNode.childNodes[0].nodeValue)
-            .map(cVNode => cVNode.childNodes[0].nodeValue)
-            .join("\n")
-        );
-      }
-
-      return responseText.join("\n");
+      const resolvedText = await Promise.all(orderedText);
+      return resolvedText.filter(Boolean).join('\n');
     } catch (error) {
-      console.error("Error parsing Excel file:", error);
+      console.error('Error parsing Excel file:', error);
       throw error;
     }
+  }
+
+  private parseSharedStrings(sharedStringsXml?: string): string[] {
+    if (!sharedStringsXml) return [];
+    const tNodes = parseString(sharedStringsXml).getElementsByTagName('t');
+    return Array.from(tNodes).map((node) => node.childNodes[0]?.nodeValue ?? '');
+  }
+
+  private extractSheetText(sheetFiles: string[], sharedStrings: string[]): string {
+    return sheetFiles
+      .map((content) => {
+        const cNodes = parseString(content).getElementsByTagName('c');
+        return Array.from(cNodes)
+          .filter((node) => this.isValidInlineString(node) || this.hasValidValueNode(node))
+          .map((node) => this.getCellValue(node, sharedStrings))
+          .join('\n');
+      })
+      .join('\n');
+  }
+
+  private extractDrawingText(drawingFiles: string[]): string {
+    return drawingFiles
+      .map((content) => {
+        const pNodes = parseString(content).getElementsByTagName('a:p');
+        return Array.from(pNodes)
+          .map((node) => {
+            const tNodes = node.getElementsByTagName('a:t');
+            return Array.from(tNodes)
+              .map((tNode) => tNode.childNodes[0]?.nodeValue ?? '')
+              .join('');
+          })
+          .join('\n');
+      })
+      .join('\n');
+  }
+
+  private extractChartText(chartFiles: string[]): string {
+    return chartFiles
+      .map((content) => {
+        const vNodes = parseString(content).getElementsByTagName('c:v');
+        return Array.from(vNodes)
+          .map((node) => node.childNodes[0]?.nodeValue ?? '')
+          .join('\n');
+      })
+      .join('\n');
+  }
+
+  private async extractImageText(
+    imageFiles: { path: string; content: Buffer }[],
+    extractingOptions: ExtractingOptions,
+  ): Promise<string> {
+    const texts = await Promise.all(
+      imageFiles.map(async (file) => {
+        try {
+          return await this.anyExtractor.extractText(
+            file.content,
+            extractingOptions.extractImages,
+            extractingOptions.imageExtractionMethod,
+            extractingOptions.language,
+          );
+        } catch (e) {
+          console.log(`Error extracting text from image ${file.path}:`, e);
+          return '';
+        }
+      }),
+    );
+    return texts.filter(Boolean).join('\n');
+  }
+
+  private isValidInlineString(cNode: Element): boolean {
+    if (cNode.tagName.toLowerCase() !== 'c' || cNode.getAttribute('t') !== 'inlineStr')
+      return false;
+    const isNodes = cNode.getElementsByTagName('is');
+    const tNodes = isNodes[0]?.getElementsByTagName('t');
+    return tNodes?.[0]?.childNodes[0]?.nodeValue !== undefined;
+  }
+
+  private hasValidValueNode(cNode: Element): boolean {
+    const vNodes = cNode.getElementsByTagName('v');
+    return vNodes[0]?.childNodes[0]?.nodeValue !== undefined;
+  }
+
+  private getCellValue(cNode: Element, sharedStrings: string[]): string {
+    if (this.isValidInlineString(cNode)) {
+      return (
+        cNode.getElementsByTagName('is')[0].getElementsByTagName('t')[0].childNodes[0].nodeValue ??
+        ''
+      );
+    }
+
+    if (this.hasValidValueNode(cNode)) {
+      const isSharedString = cNode.getAttribute('t') === 's';
+      const valueIndex = parseInt(
+        cNode.getElementsByTagName('v')[0].childNodes[0].nodeValue ?? '',
+        10,
+      );
+
+      if (isSharedString) {
+        if (valueIndex >= sharedStrings.length) {
+          throw ERRORMSG.fileCorrupted('Invalid shared string index.');
+        }
+        return sharedStrings[valueIndex];
+      }
+
+      return valueIndex.toString();
+    }
+
+    return '';
   }
 }

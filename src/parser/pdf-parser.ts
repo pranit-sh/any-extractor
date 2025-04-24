@@ -1,8 +1,8 @@
 import pdf from 'pdf-parse';
-import { AnyParserMethod } from "../types";
+import { AnyParserMethod } from '../types';
 
 export class PDFParser implements AnyParserMethod {
-  mimes = ["application/pdf"];
+  mimes = ['application/pdf'];
 
   apply = async (file: Buffer): Promise<string> => {
     try {
@@ -10,7 +10,7 @@ export class PDFParser implements AnyParserMethod {
       const textContent = data.text;
       return textContent;
     } catch (error) {
-      console.error("Error parsing PDF file:", error);
+      console.error('Error parsing PDF file:', error);
       throw error;
     }
   };

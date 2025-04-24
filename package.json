@@ -1,7 +1,7 @@
 {
   "name": "any-extractor",
-  "version": "1.0.0",
-  "description": "A universal extractor for any file type.",
+  "version": "1.0.1",
+  "description": "A universal text extractor for files.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -12,31 +12,59 @@
     }
   },
   "scripts": {
+    "lint": "eslint .",
+    "lint:check": "eslint . --no-error-on-unmatched-pattern",
+    "format": "prettier --write 'src/**/*.{ts,js,json,md}'",
     "build": "tsup src/index.ts --dts --format esm,cjs --out-dir dist"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "text extraction",
+    "ocr",
+    "llm",
+    "image text extraction",
+    "file parser"
+  ],
+  "author": "Pranit Deshmukh",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pranit-sh/any-extractor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pranit-sh/any-extractor/issues"
+  },
+  "homepage": "https://github.com/pranit-sh/any-extractor#readme",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_LICENSES.md"
+  ],
   "devDependencies": {
+    "@eslint/js": "^9.25.1",
     "@types/concat-stream": "^2.0.3",
     "@types/js-yaml": "^4.0.9",
     "@types/mime-types": "^2.1.4",
     "@types/node": "^22.14.0",
     "@types/pdf-parse": "^1.1.5",
     "@types/yauzl": "^2.10.3",
-    "eslint": "^9.24.0",
+    "@typescript-eslint/eslint-plugin": "^8.31.0",
+    "@typescript-eslint/parser": "^8.31.0",
+    "eslint": "^9.25.1",
+    "eslint-config-prettier": "^10.1.2",
+    "eslint-plugin-node": "^11.1.0",
+    "eslint-plugin-prettier": "^5.2.6",
     "prettier": "^3.5.3",
     "ts-node": "^10.9.2",
-    "tsup": "^8.4.0",
-    "typescript": "^5.8.3"
+    "tsup": "^8.4.0"
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.8",
-    "axios": "^1.8.4",
     "concat-stream": "^2.0.0",
     "file-type-mime": "^0.4.6",
     "js-yaml": "^4.1.0",
     "pdf-parse": "^1.1.1",
+    "tesseract.js": "^6.0.1",
     "undici": "^7.8.0",
     "yauzl": "^3.2.0"
   }

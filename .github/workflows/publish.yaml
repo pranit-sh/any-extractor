@@ -1,0 +1,32 @@
+name: Publish Package
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '23'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Authenticate to NPM
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+        
+      - name: Build and Publish
+        run: npm run build && npm publish
+
+      - name: Add Provenance Information
+        run: |
+          echo "Built and signed on GitHub Actions" >> README.md
+          echo "Source Commit: $(git rev-parse HEAD)" >> README.md

@@ -1,20 +1,38 @@
-import { AnyExtractor } from "./extractors/any-extractor";
-import { ExcelParser } from "./parser/excel-parser";
-import { OpenOfficeParser } from "./parser/openoffice-paser";
-import { PDFParser } from "./parser/pdf-parser";
-import { PowerPointParser } from "./parser/powerpoint-parser";
-import { WordParser } from "./parser/word-parser";
+import { AnyExtractor } from './extractors/any-extractor';
+import { ExtractorConfig } from './types';
+import {
+  ExcelParser,
+  ImageParser,
+  OpenOfficeParser,
+  PDFParser,
+  PowerPointParser,
+  SimpleParser,
+  WordParser,
+} from './parser';
 
-export const getAnyExtractor = (): AnyExtractor => {
-  const anyExtractor = new AnyExtractor();
-  
-  anyExtractor.addParser(new ExcelParser());
-  anyExtractor.addParser(new OpenOfficeParser());
-  anyExtractor.addParser(new PDFParser());
-  anyExtractor.addParser(new PowerPointParser());
-  anyExtractor.addParser(new WordParser());
+/**
+ * Get an extractor with parsers for various file formats.
+ *
+ * @param {ExtractorConfig} [config] - Optional configuration for the extractor.
+ * @returns {AnyExtractor} - The configured AnyExtractor instance.
+ */
+export const getAnyExtractor = (config?: ExtractorConfig): AnyExtractor => {
+  const anyExtractor = new AnyExtractor(config);
+
+  // List of parsers for handling various file types
+  const parsers = [
+    new ExcelParser(anyExtractor),
+    new ImageParser(),
+    new OpenOfficeParser(),
+    new PDFParser(),
+    new PowerPointParser(anyExtractor),
+    new SimpleParser(),
+    new WordParser(anyExtractor),
+  ];
+
+  parsers.forEach((parser) => anyExtractor.addParser(parser));
 
   return anyExtractor;
-}
+};
 
-export * from "./types";
+export * from './types';

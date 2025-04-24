@@ -1,57 +1,59 @@
-import { ERRORMSG } from "../constant";
-import { AnyParserMethod } from "../types";
-import { extractFiles, parseString } from "../util";
-import { Element, Node } from "@xmldom/xmldom";
+import { AnyParserMethod } from '../types';
+import { extractFiles, parseString } from '../util';
+import { Element, Node } from '@xmldom/xmldom';
 
 export class OpenOfficeParser implements AnyParserMethod {
-  mimes = ["application/vnd.oasis.opendocument.text",
-    "application/vnd.oasis.opendocument.spreadsheet",
-    "application/vnd.oasis.opendocument.presentation",
-    "application/vnd.oasis.opendocument.graphics",
-    "application/vnd.oasis.opendocument.formula"];
+  mimes = [
+    'application/vnd.oasis.opendocument.text',
+    'application/vnd.oasis.opendocument.spreadsheet',
+    'application/vnd.oasis.opendocument.presentation',
+    'application/vnd.oasis.opendocument.graphics',
+    'application/vnd.oasis.opendocument.formula',
+  ];
 
   apply = async (file: Buffer): Promise<string> => {
-    const mainContentFilePath = 'content.xml';
-    const objectContentFilesRegex = /Object \d+\/content.xml/g;
+    const MAIN_CONTENT_FILE = 'content.xml';
+    const OBJECT_CONTENT_REGEX = /Object \d+\/content.xml/;
 
     try {
-      const files = await extractFiles(file, x => x == mainContentFilePath || !!x.match(objectContentFilesRegex));
+      const files = await extractFiles(
+        file,
+        (path) => path === MAIN_CONTENT_FILE || OBJECT_CONTENT_REGEX.test(path),
+      );
 
-      if (!files.map(file => file.path).includes(mainContentFilePath)) {
-        throw ERRORMSG.fileCorrupted("TODO: figure this out");
-      }
+      const contentFiles = files
+        .filter((file) => file.path === MAIN_CONTENT_FILE || OBJECT_CONTENT_REGEX.test(file.path))
+        .sort((a, b) => a.path.localeCompare(b.path));
 
-      const xmlContentFilesObject = {
-        mainContentFile: files.filter(file => file.path == mainContentFilePath).map(file => file.content)[0],
-        objectContentFiles: files.filter(file => file.path.match(objectContentFilesRegex)).map(file => file.content),
+      const notesText: string[] = [];
+      const outputChunks: string[] = [];
+
+      const ALLOWED_TEXT_TAGS = ['text:p', 'text:h'];
+      const NOTES_TAG = 'presentation:notes';
+
+      const extractAllTextsFromNode = (root: Element): string => {
+        const textArray: string[] = [];
+        traverseNode(root, textArray, true);
+        return textArray.join('');
       };
 
-      let notesText: string[] = [];
-      let responseText: string[] = [];
-
-      const allowedTextTags = ["text:p", "text:h"];
-      const notesTag = "presentation:notes";
-
-      function extractAllTextsFromNode(root: Element): string {
-        let xmlTextArray: string[] = [];
-        for (let i = 0; i < root.childNodes.length; i++) {
-          traversal(root.childNodes[i], xmlTextArray, true);
-        }
-        return xmlTextArray.join("");
-      }
-
-      function traversal(node: Node, xmlTextArray: string[], isFirstRecursion: boolean): void {
-        if (!node.childNodes || node.childNodes.length == 0) {
-          if (node.parentNode && (node.parentNode as Element).tagName.indexOf('text') == 0 && node.nodeValue) {
-            if (isNotesNode(node.parentNode as Element)) {
+      const traverseNode = (node: Node, textArray: string[], isFirstRecursion: boolean): void => {
+        if (!node.childNodes || node.childNodes.length === 0) {
+          if (
+            node.parentNode &&
+            (node.parentNode as Element).tagName.startsWith('text') &&
+            node.nodeValue
+          ) {
+            const parent = node.parentNode as Element;
+            if (isNotesNode(parent)) {
               notesText.push(node.nodeValue);
-              if (allowedTextTags.includes((node.parentNode as Element).tagName) && !isFirstRecursion) {
-                notesText.push("\n");
+              if (ALLOWED_TEXT_TAGS.includes(parent.tagName) && !isFirstRecursion) {
+                notesText.push('\n');
               }
             } else {
-              xmlTextArray.push(node.nodeValue);
-              if (allowedTextTags.includes((node.parentNode as Element).tagName) && !isFirstRecursion) {
-                xmlTextArray.push("\n");
+              textArray.push(node.nodeValue);
+              if (ALLOWED_TEXT_TAGS.includes(parent.tagName) && !isFirstRecursion) {
+                textArray.push('\n');
               }
             }
           }
@@ -59,50 +61,48 @@ export class OpenOfficeParser implements AnyParserMethod {
         }
 
         for (let i = 0; i < node.childNodes.length; i++) {
-          traversal(node.childNodes[i] as Element, xmlTextArray, false);
+          traverseNode(node.childNodes[i], textArray, false);
         }
-      }
+      };
 
-      function isNotesNode(node: Element): boolean {
-        if (node.tagName == notesTag) {
-          return true;
-        }
-        if (node.parentNode) {
-          return isNotesNode(node.parentNode as Element);
-        }
-        return false;
-      }
+      const isNotesNode = (node: Element): boolean => {
+        return node.tagName === NOTES_TAG
+          ? true
+          : node.parentNode
+            ? isNotesNode(node.parentNode as Element)
+            : false;
+      };
 
-      function isInvalidTextNode(node: Element) {
-        if (allowedTextTags.includes(node.tagName)) {
-          return true;
-        }
-        if (node.parentNode) {
-          return isInvalidTextNode(node.parentNode as Element);
-        }
-        return false;
-      }
+      const isInvalidTextNode = (node: Element): boolean => {
+        return ALLOWED_TEXT_TAGS.includes(node.tagName)
+          ? true
+          : node.parentNode
+            ? isInvalidTextNode(node.parentNode as Element)
+            : false;
+      };
 
-      const xmlContentArray = [xmlContentFilesObject.mainContentFile, ...xmlContentFilesObject.objectContentFiles].map(xmlContent => parseString(xmlContent));
-      xmlContentArray.forEach(xmlContent => {
-        const xmlTextNodesList = [...Array.from(xmlContent
-          .getElementsByTagName("*"))
-          .filter(node => allowedTextTags.includes(node.tagName)
-            && !isInvalidTextNode(node.parentNode as Element))];
-        responseText.push(
-          xmlTextNodesList
-            .map(textNode => extractAllTextsFromNode(textNode))
-            .filter(text => text != "")
-            .join("\n")
+      for (const contentFile of contentFiles) {
+        const xmlDoc = parseString(contentFile.content.toString());
+        const textNodes = Array.from(xmlDoc.getElementsByTagName('*')).filter(
+          (node) =>
+            ALLOWED_TEXT_TAGS.includes(node.tagName) &&
+            !isInvalidTextNode(node.parentNode as Element),
         );
-      });
 
-      responseText = [...responseText, ...notesText];
-      return responseText.join("\n");
+        const textChunk = textNodes
+          .map((node) => extractAllTextsFromNode(node))
+          .filter((text) => text.trim() !== '')
+          .join('\n');
 
+        if (textChunk) {
+          outputChunks.push(textChunk);
+        }
+      }
+
+      return [...outputChunks, ...notesText].join('\n\n');
     } catch (error) {
-      console.error("Error parsing OpenOffice file:", error);
+      console.error('Error parsing OpenOffice file:', error);
       throw error;
     }
-  }
+  };
 }

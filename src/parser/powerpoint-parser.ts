@@ -1,58 +1,107 @@
-import { ERRORMSG } from "../constant";
-import { AnyParserMethod } from "../types";
-import { extractFiles, parseString } from "../util";
+import { AnyExtractor } from '../extractors/any-extractor';
+import { AnyParserMethod, ExtractingOptions } from '../types';
+import { extractFiles, parseString } from '../util';
 
 export class PowerPointParser implements AnyParserMethod {
-  mimes = ["application/vnd.openxmlformats-officedocument.presentationml.presentation"];
+  private anyExtractor: AnyExtractor;
 
-  async apply(file: Buffer): Promise<string> {
-    const allFilesRegex = /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+.xml/g;
-    const slidesRegex = /ppt\/slides\/slide\d+.xml/g;
-    const slideNumberRegex = /lide(\d+)\.xml/;
+  constructor(anyExtractor: AnyExtractor) {
+    this.anyExtractor = anyExtractor;
+  }
+
+  mimes = ['application/vnd.openxmlformats-officedocument.presentationml.presentation'];
+
+  async apply(
+    file: Buffer,
+    _mimeType: string,
+    extractingOptions: ExtractingOptions,
+  ): Promise<string> {
+    const fileMatchRegex =
+      /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+\.xml|ppt\/media\/image\d+\..+|ppt\/slides\/_rels\/slide\d+\.xml.rels/i;
+    const slideNumberRegex = /slide(\d+)\.xml/;
+    const imageRegex = /^ppt\/media\/image\d+\..+$/i;
 
     try {
-      const files = await extractFiles(file, x => !!x.match(allFilesRegex));
+      const files = await extractFiles(file, (x) => fileMatchRegex.test(x));
+      const imageBuffers: Record<string, Buffer> = {};
+      const slideXmls: Record<number, string> = {};
+      const relsFiles: Record<number, string> = {};
 
-      files.sort((a, b) => {
-        const matchedANumber = parseInt(a.path.match(slideNumberRegex)?.at(1) ?? "", 10);
-        const matchedBNumber = parseInt(b.path.match(slideNumberRegex)?.at(1) ?? "", 10);
-
-        const aNumber = isNaN(matchedANumber) ? Infinity : matchedANumber;
-        const bNumber = isNaN(matchedBNumber) ? Infinity : matchedBNumber;
-
-        return aNumber - bNumber || Number(a.path.includes('notes')) - Number(b.path.includes('notes'));
-      });
-
-      if (files.length == 0 || !files.map(file => file.path).some(filename => filename.match(slidesRegex))) {
-        throw ERRORMSG.fileCorrupted("TODO: figure this out");
+      for (const file of files) {
+        if (imageRegex.test(file.path)) {
+          imageBuffers[file.path] = file.content;
+        } else if (/ppt\/slides\/slide\d+\.xml/.test(file.path)) {
+          const match = file.path.match(slideNumberRegex);
+          if (match) slideXmls[+match[1]] = file.content.toString();
+        } else if (/ppt\/slides\/_rels\/slide\d+\.xml.rels/.test(file.path)) {
+          const match = file.path.match(slideNumberRegex);
+          if (match) relsFiles[+match[1]] = file.content.toString();
+        }
       }
 
-      files.sort((a, b) => a.path.indexOf("notes") - b.path.indexOf("notes"));
+      const results: string[] = [];
 
-      const xmlContentArray = files.map(file => file.content);
+      const sortedSlideNumbers = Object.keys(slideXmls)
+        .map(Number)
+        .sort((a, b) => a - b);
 
-      let responseText: string[] = [];
+      for (const slideNumber of sortedSlideNumbers) {
+        const xmlContent = slideXmls[slideNumber];
+        const slideText = this.extractTextFromXml(xmlContent);
+        if (slideText) results.push(slideText);
 
-      for (const xmlContent of xmlContentArray) {
-        const xmlParagraphNodesList = parseString(xmlContent).getElementsByTagName("a:p");
-        responseText.push(
-          Array.from(xmlParagraphNodesList)
-            .filter(paragraphNode => paragraphNode.getElementsByTagName("a:t").length != 0)
-            .map(paragraphNode => {
-              const xmlTextNodeList = paragraphNode.getElementsByTagName("a:t");
-              return Array.from(xmlTextNodeList)
-                .filter(textNode => textNode.childNodes[0] && textNode.childNodes[0].nodeValue)
-                .map(textNode => textNode.childNodes[0].nodeValue)
-                .join("");
-            })
-            .join("\n")
-        );
+        const imagePaths = this.extractImagePathsFromRels(relsFiles[slideNumber]);
+        for (const imagePath of imagePaths) {
+          const imageFullPath = `ppt/${imagePath.replace(/^(\.\.\/)+/, '')}`;
+          const imageBuffer = imageBuffers[imageFullPath];
+          if (imageBuffer) {
+            const imageDescription = await this.convertImageToText(imageBuffer, extractingOptions);
+            if (imageDescription) {
+              results.push(`[Image]: ${imageDescription}`);
+            }
+          }
+        }
       }
-      const responseTextString = responseText.join("\n");
-      return responseTextString;
+
+      return results.join('\n');
     } catch (error) {
-      console.error("Error parsing PowerPoint file:", error);
+      console.error('Error parsing PowerPoint file:', error);
       throw error;
     }
+  }
+
+  private extractTextFromXml(xml: string): string {
+    const xmlParagraphNodesList = parseString(xml).getElementsByTagName('a:p');
+
+    return Array.from(xmlParagraphNodesList)
+      .filter((paragraphNode) => paragraphNode.getElementsByTagName('a:t').length > 0)
+      .map((paragraphNode) => {
+        const xmlTextNodeList = paragraphNode.getElementsByTagName('a:t');
+        return Array.from(xmlTextNodeList)
+          .map((textNode) => textNode.childNodes[0]?.nodeValue || '')
+          .join('');
+      })
+      .join('\n');
+  }
+
+  private extractImagePathsFromRels(relsXml?: string): string[] {
+    if (!relsXml) return [];
+
+    const rels = parseString(relsXml).getElementsByTagName('Relationship');
+    return Array.from(rels)
+      .filter((rel) => rel.getAttribute('Type')?.includes('/image') && rel.getAttribute('Target'))
+      .map((rel) => rel.getAttribute('Target')!);
+  }
+
+  private async convertImageToText(
+    imageBuffer: Buffer,
+    extractingOptions: ExtractingOptions,
+  ): Promise<string> {
+    return this.anyExtractor.extractText(
+      imageBuffer,
+      extractingOptions.extractImages,
+      extractingOptions.imageExtractionMethod,
+      extractingOptions.language,
+    );
   }
 }
