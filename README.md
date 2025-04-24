@@ -157,8 +157,14 @@ console.log('Extracted Text:', text);
 
 > Creating custom parsers for existing mimetypes will overwrite the implementation.
 
+## Needs Work
+
+1. `.pdf` and `OpenOffice` files doesn't support image extraction.
+2. `.xlsx` parsing isn't well structured and ordered.
+3. Doesn't support text extraction from web and compressed files.
+
 ## Credits
-any-extractor is heavily inspired from [officeparser](https://www.npmjs.com/package/officeparser). Ultimately any-extractor is an effort to provide a universal standalone text extractor for every file.
+any-extractor is inspired from [officeparser](https://www.npmjs.com/package/officeparser). Ultimately any-extractor is an effort to provide a universal standalone text extractor for every file.
 
 ## License
 [MIT](https://github.com/pranit-sh/any-extractor/blob/main/LICENSE)
