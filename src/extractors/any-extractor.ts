@@ -1,10 +1,5 @@
 import { parse } from 'file-type-mime';
-import {
-  AnyParserMethod,
-  ExtractingOptions,
-  ExtractorConfig,
-  SupportedOCRLanguage,
-} from '../types';
+import { AnyParserMethod, ExtractingOptions, ExtractorConfig } from '../types';
 import { isValidUrl, readFile, readFileUrl } from '../util';
 
 export class AnyExtractor {
