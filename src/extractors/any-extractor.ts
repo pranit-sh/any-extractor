@@ -37,9 +37,7 @@ export class AnyExtractor {
 
   public extractText = async (
     input: string | Buffer,
-    extractImages: boolean = false,
-    imageExtractionMethod: 'ocr' | 'llm' = 'ocr',
-    language: SupportedOCRLanguage = 'eng',
+    extractingOptions: ExtractingOptions
   ): Promise<string> => {
     let preparedInput: Buffer;
     if (typeof input === 'string') {
@@ -75,7 +73,7 @@ export class AnyExtractor {
     return extractor.apply(
       preparedInput,
       mimeDetails.mime,
-      { extractImages, imageExtractionMethod, language } as ExtractingOptions,
+      extractingOptions,
       this.extractorConfig,
     );
   };

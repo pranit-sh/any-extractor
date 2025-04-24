@@ -133,8 +133,10 @@ To create custom parser, you will need to implement `AnyParserMethod` class with
 
 Create your extractor class implementing the `AnyParserMethod`.
 ```ts
+import { AnyParserMethod } from 'any-extractor';
+
 export class CustomParser implements AnyParserMethod {
-  public mimes = ['image/jpeg', 'image/png', 'image/webp'];
+  public mimes = ['application/hdb', 'application/sql'];
 
   public apply = async (
     file: Buffer,
@@ -151,7 +153,7 @@ Add your custom parser to any extractor instance.
 ```ts
 const anyExt = getAnyExtractor();
 anyExt.addParser(new CustomParser());
-const text = await anyExt.extractText("./filename.webp");
+const text = await anyExt.extractText("./filename.sql");
 console.log('Extracted Text:', text);
 ```
 
