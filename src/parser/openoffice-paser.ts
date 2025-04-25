@@ -101,7 +101,7 @@ export class OpenOfficeParser implements AnyParserMethod {
 
       return [...outputChunks, ...notesText].join('\n\n');
     } catch (error) {
-      console.error('Error parsing OpenOffice file:', error);
+      console.error('AnyExtractor: Error parsing OpenOffice file:', error);
       throw error;
     }
   };

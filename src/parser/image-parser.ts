@@ -16,7 +16,6 @@ export class ImageParser implements AnyParserMethod {
       return '';
     }
     if (!this.mimes.includes(mimeType)) {
-      console.warn(`Unsupported mime type: ${mimeType}`);
       return '';
     }
     if (imageExtractionMethod === 'ocr') {
@@ -26,7 +25,7 @@ export class ImageParser implements AnyParserMethod {
     const { llmProvider, visionModel, apikey } = extractorConfig;
     if (!llmProvider || !visionModel || !apikey) {
       throw new Error(
-        'ImageParser: LLM provider, vision model and API key are required for image extraction',
+        'AnyExtractor: LLM provider, vision model and API key are required for image extraction',
       );
     }
 

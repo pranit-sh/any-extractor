@@ -80,7 +80,7 @@ export class WordParser implements AnyParserMethod {
         endnotesText ? '\n--- Endnotes ---\n' + endnotesText : '',
       ].join('\n');
     } catch (error) {
-      console.error('Error parsing Word file:', error);
+      console.error('AnyExtractor: Error parsing Word file:', error);
       throw error;
     }
   }

@@ -70,7 +70,7 @@ export class ExcelParser implements AnyParserMethod {
       const resolvedText = await Promise.all(orderedText);
       return resolvedText.filter(Boolean).join('\n');
     } catch (error) {
-      console.error('Error parsing Excel file:', error);
+      console.error('AnyExtractor: Error parsing Excel file:', error);
       throw error;
     }
   }
@@ -129,7 +129,7 @@ export class ExcelParser implements AnyParserMethod {
         try {
           return await this.anyExtractor.extractText(file.content, extractingOptions);
         } catch (e) {
-          console.log(`Error extracting text from image ${file.path}:`, e);
+          console.log(`AnyExtractor: Error extracting text from image ${file.path}:`, e);
           return '';
         }
       }),
@@ -167,7 +167,7 @@ export class ExcelParser implements AnyParserMethod {
 
       if (isSharedString) {
         if (valueIndex >= sharedStrings.length) {
-          throw ERRORMSG.fileCorrupted('Invalid shared string index.');
+          throw ERRORMSG.fileCorrupted('AnyExtractor: Invalid shared string index.');
         }
         return sharedStrings[valueIndex];
       }

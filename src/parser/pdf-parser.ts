@@ -10,7 +10,7 @@ export class PDFParser implements AnyParserMethod {
       const textContent = data.text;
       return textContent;
     } catch (error) {
-      console.error('Error parsing PDF file:', error);
+      console.error('AnyExtractor: Error parsing PDF file:', error);
       throw error;
     }
   };

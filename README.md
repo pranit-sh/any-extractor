@@ -3,7 +3,6 @@
 [![NPM Version](https://img.shields.io/npm/v/any-extractor)](https://www.npmjs.com/package/any-extractor)
 [![License](https://img.shields.io/npm/l/any-extractor)](https://www.npmjs.com/package/any-extractor)
 [![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-BD5FFF?style=flat&logo=buy-me-a-coffee&logoColor=ffffff&labelColor=BD5FFF)](https://www.buymeacoffee.com/pranit.sh)
 
 A Node.js package to extract text from any file.
 
@@ -21,6 +20,7 @@ A Node.js package to extract text from any file.
 - [Contributing](#contributing)
 - [Credits](#credits)
 - [License](#license)
+- [Support](#support)
 
 ## Features
 
@@ -136,6 +136,8 @@ AnyExtractor provides two primary methods for extracting text from images.
    console.log('Extracted Text:', text);
    ```
 
+> Llm parsing supports `openai`, `google` and `anthropic` llmProvider for now. But you can always overwrite the image parser implementation with your code.
+
 > Optional argument of `getAnyExtractor` and `extractText` are required for the extractor to parse images. Otherwise it will return empty string.
 
 > Image parsing also works other files, e.g., .docx, .pptx etc (see the table above).
@@ -215,6 +217,4 @@ Ultimately any-extractor is an effort to provide a universal standalone text ext
 
 ## Support
 
-If you find this package helpful, you can...
-
-<a href="https://www.buymeacoffee.com/pranit.sh" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-violet.png" alt="Buy Me A Coffee" style="height: 30px !important;width: 108px !important;" ></a>
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-BD5FFF?style=flat&logo=buy-me-a-coffee&logoColor=ffffff&labelColor=BD5FFF)](https://www.buymeacoffee.com/pranit.sh)

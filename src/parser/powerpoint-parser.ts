@@ -65,7 +65,7 @@ export class PowerPointParser implements AnyParserMethod {
 
       return results.join('\n');
     } catch (error) {
-      console.error('Error parsing PowerPoint file:', error);
+      console.error('AnyExtractor: Error parsing PowerPoint file:', error);
       throw error;
     }
   }
