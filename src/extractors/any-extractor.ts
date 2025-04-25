@@ -32,7 +32,11 @@ export class AnyExtractor {
 
   public extractText = async (
     input: string | Buffer,
-    extractingOptions: ExtractingOptions,
+    extractingOptions: ExtractingOptions = {
+      extractImages: false,
+      imageExtractionMethod: 'ocr',
+      language: 'eng',
+    },
   ): Promise<string> => {
     let preparedInput: Buffer;
     if (typeof input === 'string') {
@@ -57,7 +61,6 @@ export class AnyExtractor {
     if (!mimeDetails) {
       return preparedInput.toString('utf-8');
     }
-    console.log(`AnyExtractor: Detected MIME type: ${mimeDetails.mime}`);
     const extractor = this.mimeParserMap.get(mimeDetails.mime);
 
     if (!extractor?.apply) {

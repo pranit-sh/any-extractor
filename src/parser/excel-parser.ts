@@ -127,12 +127,7 @@ export class ExcelParser implements AnyParserMethod {
     const texts = await Promise.all(
       imageFiles.map(async (file) => {
         try {
-          return await this.anyExtractor.extractText(
-            file.content,
-            extractingOptions.extractImages,
-            extractingOptions.imageExtractionMethod,
-            extractingOptions.language,
-          );
+          return await this.anyExtractor.extractText(file.content, extractingOptions);
         } catch (e) {
           console.log(`Error extracting text from image ${file.path}:`, e);
           return '';

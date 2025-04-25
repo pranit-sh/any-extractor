@@ -97,11 +97,6 @@ export class PowerPointParser implements AnyParserMethod {
     imageBuffer: Buffer,
     extractingOptions: ExtractingOptions,
   ): Promise<string> {
-    return this.anyExtractor.extractText(
-      imageBuffer,
-      extractingOptions.extractImages,
-      extractingOptions.imageExtractionMethod,
-      extractingOptions.language,
-    );
+    return this.anyExtractor.extractText(imageBuffer, extractingOptions);
   }
 }

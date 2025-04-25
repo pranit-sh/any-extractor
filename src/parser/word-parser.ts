@@ -147,11 +147,6 @@ export class WordParser implements AnyParserMethod {
     imageBuffer: Buffer,
     extractingOptions: ExtractingOptions,
   ): Promise<string> {
-    return await this.anyExtractor.extractText(
-      imageBuffer,
-      extractingOptions.extractImages,
-      extractingOptions.imageExtractionMethod,
-      extractingOptions.language,
-    );
+    return await this.anyExtractor.extractText(imageBuffer, extractingOptions);
   }
 }

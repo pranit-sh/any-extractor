@@ -20,6 +20,12 @@ jobs:
       - name: Install Dependencies
         run: npm ci
 
+      - name: TypeScript Type Check
+        run: npm run typecheck
+      
+      - name: Run Tests with Coverage
+        run: npm run coverage
+
       - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
