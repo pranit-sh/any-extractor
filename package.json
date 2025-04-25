@@ -83,6 +83,7 @@
     "vitest": "^3.1.2"
   },
   "dependencies": {
+    "@semantic-release/git": "^10.0.1",
     "@xmldom/xmldom": "^0.9.8",
     "concat-stream": "^2.0.0",
     "file-type-mime": "^0.4.6",
