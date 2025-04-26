@@ -1,3 +1,9 @@
+## [1.0.4](https://github.com/pranit-sh/any-extractor/compare/v1.0.3...v1.0.4) (2025-04-26)
+
+### Bug Fixes
+
+- corrects dev-dependancies ([1cf7e31](https://github.com/pranit-sh/any-extractor/commit/1cf7e311f44c7878d338c40f67a1b4e5a4b27282))
+
 ## [1.0.3](https://github.com/pranit-sh/any-extractor/compare/v1.0.2...v1.0.3) (2025-04-25)
 
 ### Bug Fixes

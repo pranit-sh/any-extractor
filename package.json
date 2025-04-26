@@ -1,6 +1,6 @@
 {
   "name": "any-extractor",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A universal text extractor for files.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
