@@ -56,7 +56,7 @@ Here's a breakdown of the text extraction capabilities for each file type:
 ## Installation
 
 This is a Node.js module available through the npm registry.<br>
-Before installing, download and install Node.js. Node.js 20 or higher is required.
+To work with this package, Node.js 20 or higher is required.
 
 #### Package Manager
 
@@ -214,6 +214,11 @@ Ultimately any-extractor is an effort to provide a universal standalone text ext
 ## License
 
 [MIT](https://github.com/pranit-sh/any-extractor/blob/main/LICENSE)
+
+## Report
+
+If you encounter bugs or have feature requests, [open an issue](https://github.com/pranit-sh/any-extractor/issues).
+Feel free to [start a discussion](https://github.com/pranit-sh/any-extractor/discussions) — whether it’s feedback, a question, or an idea!
 
 ## Support
 
