@@ -32,7 +32,7 @@ A Node.js package to extract text from any file.
 - **Flexible input options:** Supports local file path, buffers, and file URLs.
 - **Auto type detection:** Automatically detects file type and extracts text using MIME type.
 - **Customizable parsers:** Allows creating new or modifying existing document parsers for any MIME types.
-- **Confluence Support:** Extracts text from Confluence documents.
+- **Confluence support:** Extracts text from Confluence documents.
 
 #### Supported Files
 
