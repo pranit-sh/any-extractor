@@ -16,6 +16,7 @@ A Node.js package to extract text from any file.
 - [Getting Started](#getting-started)
 - [Advanced Usage](#advanced-usage)
 - [Custom Parsers](#custom-parsers)
+- [Confluence Crawling](#confluence-crawling)
 - [Needs Work](#needs-work)
 - [Contributing](#contributing)
 - [Credits](#credits)
@@ -31,6 +32,7 @@ A Node.js package to extract text from any file.
 - **Flexible input options:** Supports local file path, buffers, and file URLs.
 - **Auto type detection:** Automatically detects file type and extracts text using MIME type.
 - **Customizable parsers:** Allows creating new or modifying existing document parsers for any MIME types.
+- **Confluence Support:** Extracts text from Confluence documents.
 
 #### Supported Files
 
@@ -52,6 +54,7 @@ Here's a breakdown of the text extraction capabilities for each file type:
 | `.txt`                                           | ✅              | N/A              |
 | `.json`                                          | ✅              | N/A              |
 | Plain text (e.g., `.py`,<br> `.ts`, `.md`, etc.) | ✅              | N/A              |
+| `confluence`                                     | ✅              | ✅               |
 
 ## Installation
 
@@ -77,7 +80,7 @@ import { getAnyExtractor } from 'any-extractor';
 
 async function extractFromFile() {
   const anyExt = getAnyExtractor();
-  const text = await anyExt.extractText('./filename.docx');
+  const text = await anyExt.parseFile('./filename.docx');
   console.log('Extracted Text:', text);
 }
 
@@ -91,7 +94,7 @@ const { getAnyExtractor } = require('any-extractor');
 
 async function extractFromFile() {
   const textExt = getAnyExtractor();
-  const result = await textExt.extractText('./filename.docx');
+  const result = await textExt.parseFile('./filename.docx');
   console.log(result);
 }
 
@@ -109,7 +112,7 @@ AnyExtractor provides two primary methods for extracting text from images.
    ```ts
    const anyExt = getAnyExtractor();
 
-   const text = await anyExt.extractText('./imgfile.png', {
+   const text = await anyExt.parseFile('./imgfile.png', null, {
      extractImages: true,
      imageExtractionMethod: 'ocr',
      language: 'eng',
@@ -127,7 +130,7 @@ AnyExtractor provides two primary methods for extracting text from images.
      apikey: '<your-api-key>',
    });
 
-   const text = await anyExt.extractText('./imgfile.png', {
+   const text = await anyExt.parseFile('./imgfile.png', null, {
      extractImages: true,
      imageExtractionMethod: 'llm',
      language: 'eng',
@@ -141,6 +144,18 @@ AnyExtractor provides two primary methods for extracting text from images.
 > Optional argument of `getAnyExtractor` and `extractText` are required for the extractor to parse images. Otherwise it will return empty string.
 
 > Image parsing also works other files, e.g., .docx, .pptx etc (see the table above).
+
+#### Authorization Parameter
+
+The second argument in `parseFile`, shown as `null`, is for Basic Authentication when accessing file URLs. Format: `Basic <base64-encoded-credentials>`
+
+Example:
+
+```ts
+const authString = 'Basic ' + Buffer.from('user:password').toString('base64');
+const text = await anyExt.parseFile('https://example.com/protected-file.docx', authString);
+console.log('Extracted Text:', text);
+```
 
 #### Custom Parsers:
 
@@ -183,6 +198,38 @@ console.log('Extracted Text:', text);
 ```
 
 > Creating custom parsers for existing mimetypes will overwrite the implementation.
+
+#### Confluence Crawling
+
+Extract text from Confluence documents:
+
+```ts
+const { getAnyExtractor } = require('any-extractor');
+
+async function crawlConfluence() {
+  const textExt = getAnyExtractor({
+    llm: {
+      llmProvider: 'google',
+      visionModel: 'gemini-2.0-flash',
+      apikey: '<your-api-key>',
+    },
+    confluence: {
+      baseUrl: '<baseurl>',
+      email: '<username>',
+      apiKey: '<api-key>',
+    },
+  });
+
+  const result = await textExt.parseConfluenceDoc('<pageId>', {
+    extractAttachments: true,
+    extractImages: false,
+    imageExtractionMethod: 'ocr',
+    language: 'eng',
+  });
+}
+
+crawlConfluence();
+```
 
 ## Needs Work
 

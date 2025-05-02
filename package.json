@@ -85,6 +85,7 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.8",
+    "cheerio": "^1.0.0",
     "concat-stream": "^2.0.0",
     "file-type-mime": "^0.4.6",
     "js-yaml": "^4.1.0",

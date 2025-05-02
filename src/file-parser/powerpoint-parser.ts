@@ -11,11 +11,7 @@ export class PowerPointParser implements AnyParserMethod {
 
   mimes = ['application/vnd.openxmlformats-officedocument.presentationml.presentation'];
 
-  async apply(
-    file: Buffer,
-    _mimeType: string,
-    extractingOptions: ExtractingOptions,
-  ): Promise<string> {
+  async apply(file: Buffer, extractingOptions: ExtractingOptions): Promise<string> {
     const fileMatchRegex =
       /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+\.xml|ppt\/media\/image\d+\..+|ppt\/slides\/_rels\/slide\d+\.xml.rels/i;
     const slideNumberRegex = /slide(\d+)\.xml/;
@@ -97,6 +93,6 @@ export class PowerPointParser implements AnyParserMethod {
     imageBuffer: Buffer,
     extractingOptions: ExtractingOptions,
   ): Promise<string> {
-    return this.anyExtractor.extractText(imageBuffer, extractingOptions);
+    return this.anyExtractor.parseFile(imageBuffer, null, extractingOptions);
   }
 }

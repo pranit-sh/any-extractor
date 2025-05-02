@@ -10,8 +10,12 @@ export async function readFile(filePath: string): Promise<Buffer> {
   return await fs.readFile(filePath);
 }
 
-export const readFileUrl = async (url: string): Promise<Buffer> => {
-  const res = await fetch(url);
+export const readFileUrl = async (url: string, basicAuth?: string | null): Promise<Buffer> => {
+  const res = await fetch(url, {
+    headers: {
+      ...(basicAuth ? { Authorization: basicAuth } : {}),
+    },
+  });
   if (!res.ok) throw new Error(`Failed to fetch: ${res.statusText}`);
   return Buffer.from(await res.arrayBuffer());
 };

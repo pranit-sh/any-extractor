@@ -1,6 +1,6 @@
 export type AnyParserMethod = {
   mimes: string[];
-  apply: (_: Buffer, __: string, ___: ExtractingOptions, ____: ExtractorConfig) => Promise<string>;
+  apply: (_: Buffer, ___: ExtractingOptions, ____: ExtractorConfig) => Promise<string>;
 };
 
 export type ExtractedFile = {
@@ -9,12 +9,26 @@ export type ExtractedFile = {
 };
 
 export type ExtractorConfig = {
-  llmProvider: 'openai' | 'google' | 'anthropic';
-  visionModel: string;
-  apikey: string;
+  llm?: {
+    llmProvider: 'openai' | 'google' | 'anthropic';
+    visionModel: string;
+    apikey: string;
+  };
+  confluence?: {
+    baseUrl: string;
+    email: string;
+    apiKey: string;
+  };
 };
 
 export type ExtractingOptions = {
+  extractImages: boolean;
+  imageExtractionMethod: 'llm' | 'ocr';
+  language: SupportedOCRLanguage;
+};
+
+export type ConfluenceOptions = {
+  extractAttachments: boolean;
   extractImages: boolean;
   imageExtractionMethod: 'llm' | 'ocr';
   language: SupportedOCRLanguage;
@@ -123,3 +137,8 @@ export type SupportedOCRLanguage =
   | 'uzb_cyrl'
   | 'vie'
   | 'yid';
+
+export type ExtractedXmlItem = {
+  type: string;
+  content: string;
+};

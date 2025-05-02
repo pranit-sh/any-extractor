@@ -1,13 +1,13 @@
 import Tesseract from 'tesseract.js';
 import { AnyParserMethod, ExtractingOptions, ExtractorConfig } from '../types';
 import { fetch } from 'undici';
+import { parse } from 'file-type-mime';
 
 export class ImageParser implements AnyParserMethod {
   mimes = ['image/jpeg', 'image/png', 'image/webp'];
 
   public apply = async (
     file: Buffer,
-    mimeType: string,
     extractingOptions: ExtractingOptions,
     extractorConfig: ExtractorConfig,
   ): Promise<string> => {
@@ -15,6 +15,13 @@ export class ImageParser implements AnyParserMethod {
     if (!extractImages) {
       return '';
     }
+    const mimeDetails = parse(
+      file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength) as ArrayBuffer,
+    );
+    if (!mimeDetails) {
+      throw new Error('AnyExtractor: Unable to parse MIME type');
+    }
+    const mimeType = mimeDetails.mime;
     if (!this.mimes.includes(mimeType)) {
       return '';
     }
@@ -22,7 +29,7 @@ export class ImageParser implements AnyParserMethod {
       return await this.performOCR(file, language);
     }
 
-    const { llmProvider, visionModel, apikey } = extractorConfig;
+    const { llmProvider, visionModel, apikey } = extractorConfig.llm || {};
     if (!llmProvider || !visionModel || !apikey) {
       throw new Error(
         'AnyExtractor: LLM provider, vision model and API key are required for image extraction',

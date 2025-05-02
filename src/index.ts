@@ -8,7 +8,7 @@ import {
   PowerPointParser,
   SimpleParser,
   WordParser,
-} from './parser';
+} from './file-parser';
 
 /**
  * Get an extractor with parsers for various file formats.

@@ -11,11 +11,7 @@ export class WordParser implements AnyParserMethod {
 
   mimes = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
 
-  async apply(
-    file: Buffer,
-    _mimeType: string,
-    extractingOptions: ExtractingOptions,
-  ): Promise<string> {
+  async apply(file: Buffer, extractingOptions: ExtractingOptions): Promise<string> {
     const mainRegex = /word\/document[\d+]?.xml/;
     const footnotesRegex = /word\/footnotes[\d+]?.xml/;
     const endnotesRegex = /word\/endnotes[\d+]?.xml/;
@@ -147,6 +143,6 @@ export class WordParser implements AnyParserMethod {
     imageBuffer: Buffer,
     extractingOptions: ExtractingOptions,
   ): Promise<string> {
-    return await this.anyExtractor.extractText(imageBuffer, extractingOptions);
+    return await this.anyExtractor.parseFile(imageBuffer, null, extractingOptions);
   }
 }
