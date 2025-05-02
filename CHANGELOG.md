@@ -1,3 +1,13 @@
+# [2.0.0](https://github.com/pranit-sh/any-extractor/compare/v1.0.4...v2.0.0) (2025-05-02)
+
+### Features
+
+- adds confluence support ([1e68099](https://github.com/pranit-sh/any-extractor/commit/1e680999a5246fbf0e490930c1a853413c019c60))
+
+### BREAKING CHANGES
+
+- adds confluence support
+
 ## [1.0.4](https://github.com/pranit-sh/any-extractor/compare/v1.0.3...v1.0.4) (2025-04-26)
 
 ### Bug Fixes
