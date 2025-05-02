@@ -27,7 +27,7 @@ A Node.js package to extract text from any file.
 
 - **Multi-format file support:** Extracts text from a wide range of file types. (See below for list of supported files)
 - **OCR for images:** Uses Optical Character Recognition to extract text from images within documents and standalone image files.
-- **LLM for image description:** Leverages AI to extract descriptive text from images, providing richer information.
+- **LLM for image description:** Leverages AI to extract images description, providing richer information.
 - **ES6 and CommonJS support:** Supports both modern ES6 and traditional CommonJS JavaScript environments.
 - **Flexible input options:** Supports local file path, buffers, and file URLs.
 - **Auto type detection:** Automatically detects file type and extracts text using MIME type.
