@@ -1,3 +1,9 @@
+## [2.0.1](https://github.com/pranit-sh/any-extractor/compare/v2.0.0...v2.0.1) (2025-05-02)
+
+### Bug Fixes
+
+- corrects the release.yaml ([268fa9b](https://github.com/pranit-sh/any-extractor/commit/268fa9b1bf055ee90f7a1a05e3dbd423fbfef8a6))
+
 # [2.0.0](https://github.com/pranit-sh/any-extractor/compare/v1.0.4...v2.0.0) (2025-05-02)
 
 ### Features
