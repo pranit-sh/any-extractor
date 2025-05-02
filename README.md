@@ -141,7 +141,7 @@ AnyExtractor provides two primary methods for extracting text from images.
 
 > Llm parsing supports `openai`, `google` and `anthropic` llmProvider for now. But you can always overwrite the image parser implementation with your code.
 
-> Optional argument of `getAnyExtractor` and `extractText` are required for the extractor to parse images. Otherwise it will return empty string.
+> Optional argument of methods `getAnyExtractor` and `parseFile` are required for the extractor to parse images. Otherwise it will return empty string.
 
 > Image parsing also works other files, e.g., .docx, .pptx etc (see the table above).
 
