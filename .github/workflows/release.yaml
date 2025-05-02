@@ -26,6 +26,9 @@ jobs:
       - name: Run Tests with Coverage
         run: npm run coverage
 
+      - name: Build
+        run: npm run build
+
       - name: Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
