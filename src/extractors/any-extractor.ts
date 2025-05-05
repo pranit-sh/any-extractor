@@ -24,10 +24,8 @@ export class AnyExtractor {
   }
 
   private mimeParserMap: Map<string, AnyParserMethod> = new Map();
-  private parsers: AnyParserMethod[] = [];
 
   public addParser = (method: AnyParserMethod): this => {
-    this.parsers.push(method);
     method.mimes.forEach((mime) => {
       this.mimeParserMap.set(mime, method);
     });
@@ -73,7 +71,7 @@ export class AnyExtractor {
       throw new Error(message);
     }
 
-    return extractor.apply(preparedInput, extractingOptions, this.extractorConfig);
+    return await extractor.apply(preparedInput, extractingOptions, this.extractorConfig);
   };
 
   public parseConfluenceDoc = async (
