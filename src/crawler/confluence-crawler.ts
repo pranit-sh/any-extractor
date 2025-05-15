@@ -46,8 +46,13 @@ export class ConfluenceCrawler {
   }
 
   private extractOrderedContentFromXml(xml: string, pageId: string): ExtractedXmlItem[] {
-    const $ = cheerio.load(xml, { xmlMode: true });
-    const node = $('ac\\:layout').first();
+    let $ = cheerio.load(xml, { xmlMode: true });
+    let node = $('ac\\:layout').first();
+    if (node.length === 0) {
+      const newXml = `<ac:layout>${xml}</ac:layout>`;
+      $ = cheerio.load(newXml, { xmlMode: true });
+      node = $('ac\\:layout').first();
+    }
     const orderedContent = this.parseNodeContents(node, $, pageId);
     return orderedContent;
   }
