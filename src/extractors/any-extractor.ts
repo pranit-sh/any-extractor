@@ -57,8 +57,7 @@ export class AnyExtractor {
     const extractor = this.mimeParserMap.get(mimeDetails.mime);
 
     if (!extractor?.apply) {
-      const message = `AnyExtractor: No extraction method registered for MIME type '${mimeDetails.mime}'`;
-      throw new Error(message);
+      return '';
     }
 
     return await extractor.apply(preparedInput, this.extractorConfig);
