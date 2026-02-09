@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/npm/l/any-extractor)](https://www.npmjs.com/package/any-extractor)
 [![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
 
-A Node.js package to extract text from any file.
+A Node.js package to extract text from files.
 
 ## Features
 
