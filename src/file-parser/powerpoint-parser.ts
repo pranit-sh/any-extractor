@@ -1,5 +1,5 @@
 import { AnyExtractor } from '../extractors/any-extractor';
-import { AnyParserMethod, ExtractingOptions } from '../types';
+import { AnyParserMethod } from '../types';
 import { extractFiles, parseString } from '../util';
 
 export class PowerPointParser implements AnyParserMethod {
@@ -11,7 +11,7 @@ export class PowerPointParser implements AnyParserMethod {
 
   mimes = ['application/vnd.openxmlformats-officedocument.presentationml.presentation'];
 
-  async apply(file: Buffer, extractingOptions: ExtractingOptions): Promise<string> {
+  async apply(file: Buffer): Promise<string> {
     const fileMatchRegex =
       /ppt\/(notesSlides|slides)\/(notesSlide|slide)\d+\.xml|ppt\/media\/image\d+\..+|ppt\/slides\/_rels\/slide\d+\.xml.rels/i;
     const slideNumberRegex = /slide(\d+)\.xml/;
@@ -51,7 +51,7 @@ export class PowerPointParser implements AnyParserMethod {
           const imageFullPath = `ppt/${imagePath.replace(/^(\.\.\/)+/, '')}`;
           const imageBuffer = imageBuffers[imageFullPath];
           if (imageBuffer) {
-            const imageDescription = await this.convertImageToText(imageBuffer, extractingOptions);
+            const imageDescription = await this.convertImageToText(imageBuffer);
             if (imageDescription) {
               results.push(`[Image]: ${imageDescription}`);
             }
@@ -89,10 +89,7 @@ export class PowerPointParser implements AnyParserMethod {
       .map((rel) => rel.getAttribute('Target')!);
   }
 
-  private async convertImageToText(
-    imageBuffer: Buffer,
-    extractingOptions: ExtractingOptions,
-  ): Promise<string> {
-    return this.anyExtractor.parseFile(imageBuffer, null, extractingOptions);
+  private async convertImageToText(imageBuffer: Buffer): Promise<string> {
+    return this.anyExtractor.parseFile(imageBuffer, null);
   }
 }

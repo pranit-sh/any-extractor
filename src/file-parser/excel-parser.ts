@@ -1,6 +1,6 @@
 import { Element } from '@xmldom/xmldom';
 import { ERRORMSG } from '../constant';
-import { AnyParserMethod, ExtractingOptions } from '../types';
+import { AnyParserMethod } from '../types';
 import { extractFiles, parseString } from '../util';
 import { AnyExtractor } from '../extractors/any-extractor';
 
@@ -12,7 +12,7 @@ export class ExcelParser implements AnyParserMethod {
     this.anyExtractor = anyExtractor;
   }
 
-  async apply(file: Buffer, extractingOptions: ExtractingOptions): Promise<string> {
+  async apply(file: Buffer): Promise<string> {
     const patterns = {
       sheets: /xl\/worksheets\/sheet\d+.xml/g,
       drawings: /xl\/drawings\/drawing\d+.xml/g,
@@ -61,7 +61,7 @@ export class ExcelParser implements AnyParserMethod {
           } else if (patterns.charts.test(file.path)) {
             return this.extractChartText([file.content.toString()]);
           } else if (patterns.images.test(file.path)) {
-            return await this.extractImageText([file], extractingOptions);
+            return await this.extractImageText([file]);
           }
           return null;
         })
@@ -120,14 +120,11 @@ export class ExcelParser implements AnyParserMethod {
       .join('\n');
   }
 
-  private async extractImageText(
-    imageFiles: { path: string; content: Buffer }[],
-    extractingOptions: ExtractingOptions,
-  ): Promise<string> {
+  private async extractImageText(imageFiles: { path: string; content: Buffer }[]): Promise<string> {
     const texts = await Promise.all(
       imageFiles.map(async (file) => {
         try {
-          return await this.anyExtractor.parseFile(file.content, null, extractingOptions);
+          return await this.anyExtractor.parseFile(file.content, null);
         } catch (e) {
           console.log(`AnyExtractor: Error extracting text from image ${file.path}:`, e);
           return '';

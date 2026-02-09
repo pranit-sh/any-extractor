@@ -1,6 +1,6 @@
 import { ERRORMSG } from '../constant';
 import { AnyExtractor } from '../extractors/any-extractor';
-import { AnyParserMethod, ExtractingOptions, ExtractedFile } from '../types';
+import { AnyParserMethod, ExtractedFile } from '../types';
 import { extractFiles, parseString } from '../util';
 
 export class WordParser implements AnyParserMethod {
@@ -11,7 +11,7 @@ export class WordParser implements AnyParserMethod {
 
   mimes = ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
 
-  async apply(file: Buffer, extractingOptions: ExtractingOptions): Promise<string> {
+  async apply(file: Buffer): Promise<string> {
     const mainRegex = /word\/document[\d+]?.xml/;
     const footnotesRegex = /word\/footnotes[\d+]?.xml/;
     const endnotesRegex = /word\/endnotes[\d+]?.xml/;
@@ -51,23 +51,12 @@ export class WordParser implements AnyParserMethod {
         mainDoc.content.toString(),
         embedMap,
         mediaFiles,
-        extractingOptions,
       );
       const footnotesText = footnotesDoc
-        ? await this.extractTextAndImages(
-            footnotesDoc.content.toString(),
-            embedMap,
-            mediaFiles,
-            extractingOptions,
-          )
+        ? await this.extractTextAndImages(footnotesDoc.content.toString(), embedMap, mediaFiles)
         : '';
       const endnotesText = endnotesDoc
-        ? await this.extractTextAndImages(
-            endnotesDoc.content.toString(),
-            embedMap,
-            mediaFiles,
-            extractingOptions,
-          )
+        ? await this.extractTextAndImages(endnotesDoc.content.toString(), embedMap, mediaFiles)
         : '';
 
       return [
@@ -101,7 +90,6 @@ export class WordParser implements AnyParserMethod {
     xmlContent: string,
     embedMap: Record<string, string>,
     mediaFiles: Record<string, ExtractedFile>,
-    extractingOptions: ExtractingOptions,
   ): Promise<string> {
     const doc = parseString(xmlContent);
     const paragraphs = Array.from(doc.getElementsByTagName('w:p'));
@@ -125,7 +113,7 @@ export class WordParser implements AnyParserMethod {
           const imageFile = mediaFiles[embedMap[embedId]];
           if (imageFile) {
             const imageBuffer = imageFile.content;
-            const imageDescription = await this.convertImageToText(imageBuffer, extractingOptions);
+            const imageDescription = await this.convertImageToText(imageBuffer);
             paragraphText += `\n[Image: ${imageDescription}]`;
           }
         }
@@ -139,10 +127,7 @@ export class WordParser implements AnyParserMethod {
     return parts.join('\n');
   }
 
-  private async convertImageToText(
-    imageBuffer: Buffer,
-    extractingOptions: ExtractingOptions,
-  ): Promise<string> {
-    return await this.anyExtractor.parseFile(imageBuffer, null, extractingOptions);
+  private async convertImageToText(imageBuffer: Buffer): Promise<string> {
+    return await this.anyExtractor.parseFile(imageBuffer, null);
   }
 }
