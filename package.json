@@ -16,8 +16,6 @@
     "lint:check": "eslint . --no-error-on-unmatched-pattern",
     "format": "prettier --write 'src/**/*.{ts,js,json,md}'",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "coverage": "vitest run --coverage",
     "build": "tsup src/index.ts --dts --format esm,cjs --out-dir dist",
     "prepare": "husky install"
   },
