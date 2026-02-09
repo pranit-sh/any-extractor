@@ -1,15 +1,10 @@
 import { parse } from 'file-type-mime';
-import { AnyParserMethod, ConfluenceOptions, ExtractingOptions, ExtractorConfig } from '../types';
+import { AnyParserMethod, ExtractorConfig } from '../types';
 import { isValidUrl, readFile, readFileUrl } from '../util';
 import { ConfluenceCrawler } from '../crawler/confluence-crawler';
 
 export class AnyExtractor {
   private extractorConfig: ExtractorConfig = {
-    llm: {
-      llmProvider: 'openai',
-      visionModel: '',
-      apikey: '',
-    },
     confluence: {
       baseUrl: '',
       email: '',
@@ -35,11 +30,6 @@ export class AnyExtractor {
   public parseFile = async (
     input: string | Buffer,
     basicAuth: string | null = null,
-    extractingOptions: ExtractingOptions = {
-      extractImages: false,
-      imageExtractionMethod: 'ocr',
-      language: 'eng',
-    },
   ): Promise<string> => {
     let preparedInput: Buffer;
     if (typeof input === 'string') {
@@ -71,18 +61,10 @@ export class AnyExtractor {
       throw new Error(message);
     }
 
-    return await extractor.apply(preparedInput, extractingOptions, this.extractorConfig);
+    return await extractor.apply(preparedInput, this.extractorConfig);
   };
 
-  public parseConfluenceDoc = async (
-    pageId: string,
-    extractingOptions: ConfluenceOptions = {
-      extractAttachments: false,
-      extractImages: false,
-      imageExtractionMethod: 'ocr',
-      language: 'eng',
-    },
-  ): Promise<string> => {
+  public parseConfluenceDoc = async (pageId: string): Promise<string> => {
     const { baseUrl, email, apiKey } = this.extractorConfig.confluence || {};
     if (!baseUrl || !email || !apiKey) {
       throw new Error('AnyExtractor: Confluence base URL, email, and API key are required');
@@ -91,18 +73,16 @@ export class AnyExtractor {
     const content = await confCrawler.extractPageContent(pageId);
     let textContent = '';
     for (const item of content) {
-      if (item.type === 'image' && extractingOptions.extractImages) {
+      if (item.type === 'image') {
         const parsedFile = await this.parseFile(
           item.content,
           `Basic ${Buffer.from(`${email}:${apiKey}`).toString('base64')}`,
-          extractingOptions,
         );
         textContent += parsedFile ? `\n(Image): ${parsedFile}\n` : '';
-      } else if (item.type === 'view-file' && extractingOptions.extractAttachments) {
+      } else if (item.type === 'view-file') {
         const parsedFile = await this.parseFile(
           item.content,
           `Basic ${Buffer.from(`${email}:${apiKey}`).toString('base64')}`,
-          extractingOptions,
         );
         textContent += parsedFile ? `\n[Attachment]: ${parsedFile}\n` : '';
       } else if (

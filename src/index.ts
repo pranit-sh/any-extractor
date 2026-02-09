@@ -2,7 +2,6 @@ import { AnyExtractor } from './extractors/any-extractor';
 import { ExtractorConfig } from './types';
 import {
   ExcelParser,
-  ImageParser,
   OpenOfficeParser,
   PDFParser,
   PowerPointParser,
@@ -22,7 +21,6 @@ export const getAnyExtractor = (config?: ExtractorConfig): AnyExtractor => {
   // List of parsers for handling various file types
   const parsers = [
     new ExcelParser(anyExtractor),
-    new ImageParser(),
     new OpenOfficeParser(),
     new PDFParser(),
     new PowerPointParser(anyExtractor),
