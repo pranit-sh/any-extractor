@@ -1,3 +1,9 @@
+## [2.0.3](https://github.com/pranit-sh/any-extractor/compare/v2.0.2...v2.0.3) (2026-02-09)
+
+### Bug Fixes
+
+- refactors code ([6cbb9d2](https://github.com/pranit-sh/any-extractor/commit/6cbb9d2431c3c2d0b50e75a4341270bd951fc3d9))
+
 ## [2.0.2](https://github.com/pranit-sh/any-extractor/compare/v2.0.1...v2.0.2) (2025-05-15)
 
 ### Bug Fixes
