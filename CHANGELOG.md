@@ -1,3 +1,12 @@
+## [2.0.5](https://github.com/pranit-sh/any-extractor/compare/v2.0.4...v2.0.5) (2026-02-23)
+
+### Bug Fixes
+
+- add typescript as a dependency ([3f3032c](https://github.com/pranit-sh/any-extractor/commit/3f3032cdf8fc9e1f034f23e6c2b4283a66f48cb1))
+- change dependency installation command from npm ci to npm i ([aa8c9fe](https://github.com/pranit-sh/any-extractor/commit/aa8c9fe2ba532740777c8cada8a59da73e160eb2))
+- lock file correct ([e40b030](https://github.com/pranit-sh/any-extractor/commit/e40b030568990a4f68d34271335328c221b5b5c1))
+- update typescript version to 5.8.3 and bump package version to 2.0.4 ([6e6bb61](https://github.com/pranit-sh/any-extractor/commit/6e6bb61dd2e5d92db6556bcad0f2b8e79c18705f))
+
 ## [2.0.4](https://github.com/pranit-sh/any-extractor/compare/v2.0.3...v2.0.4) (2026-02-09)
 
 ### Bug Fixes
