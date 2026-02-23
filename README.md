@@ -125,11 +125,6 @@ async function crawlConfluence() {
 crawlConfluence();
 ```
 
-## Credits
-
-**any-extractor** is inspired from [officeparser](https://www.npmjs.com/package/officeparser) and it uses [tesseract.js](https://www.npmjs.com/package/tesseract.js)<br>
-Ultimately any-extractor is an effort to provide a universal standalone text extractor for every file.
-
 ## License
 
 [MIT](https://github.com/pranit-sh/any-extractor/blob/main/LICENSE)

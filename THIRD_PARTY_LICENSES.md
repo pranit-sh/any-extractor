@@ -215,8 +215,6 @@
 [supports-color@7.2.0](https://github.com/chalk/supports-color) - MIT
 [supports-preserve-symlinks-flag@1.0.0](https://github.com/inspect-js/node-supports-preserve-symlinks-flag) - MIT
 [synckit@0.11.4](https://github.com/un-ts/synckit) - MIT
-[tesseract.js-core@6.0.0](https://github.com/naptha/tesseract.js-core) - Apache-2.0
-[tesseract.js@6.0.1](https://github.com/naptha/tesseract.js) - Apache-2.0
 [thenify-all@1.6.0](https://github.com/thenables/thenify-all) - MIT
 [thenify@3.3.1](https://github.com/thenables/thenify) - MIT
 [tinyexec@0.3.2](https://github.com/tinylibs/tinyexec) - MIT
@@ -251,4 +249,3 @@
 [yn@3.1.1](https://github.com/sindresorhus/yn) - MIT
 [yocto-queue@0.1.0](https://github.com/sindresorhus/yocto-queue) - MIT
 [zlibjs@0.3.1](https://github.com/imaya/zlib.js) - MIT
-

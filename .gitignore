@@ -10,8 +10,5 @@ dist/
 # Ignore coverage reports
 coverage/
 
-# Tesseract trained data files
-*.traineddata
-
 # macOS system files
 .DS_Store

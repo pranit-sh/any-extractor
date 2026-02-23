@@ -88,7 +88,6 @@
     "file-type-mime": "^0.4.6",
     "js-yaml": "^4.1.0",
     "pdf-parse": "^1.1.1",
-    "tesseract.js": "^6.0.1",
     "undici": "^7.8.0",
     "yauzl": "^3.2.0"
   }
