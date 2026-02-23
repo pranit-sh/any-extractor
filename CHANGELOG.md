@@ -1,3 +1,9 @@
+## [2.0.4](https://github.com/pranit-sh/any-extractor/compare/v2.0.3...v2.0.4) (2026-02-09)
+
+### Bug Fixes
+
+- return empty string instead of throwing error for unregistered MIME types ([2720e58](https://github.com/pranit-sh/any-extractor/commit/2720e5827da1df0efb66a35ca4cf0caf14c5bbe0))
+
 ## [2.0.3](https://github.com/pranit-sh/any-extractor/compare/v2.0.2...v2.0.3) (2026-02-09)
 
 ### Bug Fixes
