@@ -1,177 +1,237 @@
-import { Element } from '@xmldom/xmldom';
-import { ERRORMSG } from '../constant';
-import { AnyParserMethod } from '../types';
-import { extractFiles, parseString } from '../util';
-import { AnyExtractor } from '../extractors/any-extractor';
+import type { Element } from '@xmldom/xmldom';
+import type {
+  ExtractMetadata,
+  ExtractedImage,
+  FileParser,
+  ParserContext,
+  ParserResult,
+  Section,
+} from '../types';
+import { extractFiles, parseXml } from '../util';
 
-export class ExcelParser implements AnyParserMethod {
-  mimes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+/**
+ * Parser for `.xlsx` (Office Open XML spreadsheet) files.
+ *
+ * Emits one `sheet` section per worksheet (in workbook order), labeled with
+ * the sheet name from `xl/workbook.xml`. Drawing text and chart labels are
+ * appended to their sheet. Embedded images are attached to their sheet's
+ * section and, when {@link ExtractorConfig.onImage} is set, their OCR text
+ * is inlined into `section.text`.
+ */
+export class ExcelParser implements FileParser {
+  readonly mimes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'] as const;
 
-  private anyExtractor: AnyExtractor;
-  constructor(anyExtractor: AnyExtractor) {
-    this.anyExtractor = anyExtractor;
-  }
+  async parse(file: Buffer, context: ParserContext): Promise<ParserResult> {
+    const sheetRegex = /^xl\/worksheets\/sheet(\d+)\.xml$/;
+    const drawingRegex = /^xl\/drawings\/drawing\d+\.xml$/;
+    const chartRegex = /^xl\/charts\/chart\d+\.xml$/;
+    const imageRegex = /^xl\/media\/image\d+\.(png|jpe?g|webp|gif|bmp)$/i;
+    const workbookRegex = /^xl\/workbook\.xml$/;
+    const sharedStringsPath = 'xl/sharedStrings.xml';
+    const coreRegex = /^docProps\/core\.xml$/;
 
-  async apply(file: Buffer): Promise<string> {
-    const patterns = {
-      sheets: /xl\/worksheets\/sheet\d+.xml/g,
-      drawings: /xl\/drawings\/drawing\d+.xml/g,
-      charts: /xl\/charts\/chart\d+.xml/g,
-      sharedStrings: 'xl/sharedStrings.xml',
-      images: /xl\/media\/image\d+\.(png|jpeg|jpg|webp)/g,
+    const files = await extractFiles(
+      file,
+      (path) =>
+        sheetRegex.test(path) ||
+        drawingRegex.test(path) ||
+        chartRegex.test(path) ||
+        imageRegex.test(path) ||
+        workbookRegex.test(path) ||
+        coreRegex.test(path) ||
+        path === sharedStringsPath,
+    );
+
+    const sheetFiles = files.filter((f) => sheetRegex.test(f.path));
+    if (sheetFiles.length === 0) {
+      throw new Error('any-extractor: xlsx is missing worksheet files');
+    }
+
+    const sharedStrings = parseSharedStrings(
+      files.find((f) => f.path === sharedStringsPath)?.content.toString(),
+    );
+
+    const workbookXml = files.find((f) => workbookRegex.test(f.path))?.content.toString();
+    const sheetNamesByIndex = parseSheetNames(workbookXml);
+    const coreXml = files.find((f) => coreRegex.test(f.path))?.content.toString();
+
+    // Auxiliary content that's not clearly tied to a sheet — for now, append
+    // to the last sheet section.
+    const drawingText = files
+      .filter((f) => drawingRegex.test(f.path))
+      .map((f) => extractDrawingText(f.content.toString()))
+      .filter(Boolean)
+      .join('\n');
+    const chartText = files
+      .filter((f) => chartRegex.test(f.path))
+      .map((f) => extractChartText(f.content.toString()))
+      .filter(Boolean)
+      .join('\n');
+
+    const onImage = context.config.onImage;
+    const imageEntries: ExtractedImage[] = [];
+    let inlineImages = '';
+    for (const f of files) {
+      if (!imageRegex.test(f.path)) continue;
+      const mime = guessImageMime(f.path);
+      const entry: ExtractedImage = { mime, path: f.path, bytes: f.content.length };
+      if (onImage) {
+        try {
+          const description = await onImage(f.content, mime);
+          if (description) {
+            entry.description = description;
+            inlineImages += (inlineImages ? '\n' : '') + description;
+          }
+        } catch {
+          // swallow — consistent policy across parsers.
+        }
+      }
+      imageEntries.push(entry);
+    }
+
+    // Sort sheets numerically by their filename index.
+    sheetFiles.sort((a, b) => sheetIndex(a.path) - sheetIndex(b.path));
+
+    const sections: Section[] = sheetFiles.map((f, i) => {
+      const idx = sheetIndex(f.path);
+      const name = sheetNamesByIndex[idx - 1];
+      const text = extractSheetText(f.content.toString(), sharedStrings);
+      const label = name ? `Sheet: ${name}` : `Sheet ${idx}`;
+      return {
+        kind: 'sheet',
+        index: i + 1,
+        label,
+        text,
+      };
+    });
+
+    // Attach drawing/chart/image content to the last sheet so nothing is lost.
+    const extras = [drawingText, chartText, inlineImages].filter(Boolean).join('\n');
+    if (sections.length && extras) {
+      const last = sections[sections.length - 1];
+      last.text = last.text ? `${last.text}\n${extras}` : extras;
+    }
+    if (sections.length && imageEntries.length) {
+      const last = sections[sections.length - 1];
+      last.images = imageEntries;
+    }
+
+    const metadata: Partial<ExtractMetadata> = {
+      sheetNames: sheetNamesByIndex.filter(Boolean),
+      ...(coreXml ? parseCoreProperties(coreXml) : {}),
     };
 
-    try {
-      const files = await extractFiles(
-        file,
-        (path) =>
-          [patterns.sheets, patterns.drawings, patterns.charts, patterns.images].some((regex) =>
-            regex.test(path),
-          ) || path === patterns.sharedStrings,
-      );
-
-      if (files.length === 0 || !files.some((file) => patterns.sheets.test(file.path))) {
-        throw ERRORMSG.fileCorrupted('Missing or corrupted sheet files.');
-      }
-
-      const xmlContent = {
-        sheets: files
-          .filter((file) => patterns.sheets.test(file.path))
-          .map((file) => file.content.toString()),
-        drawings: files
-          .filter((file) => patterns.drawings.test(file.path))
-          .map((file) => file.content.toString()),
-        charts: files
-          .filter((file) => patterns.charts.test(file.path))
-          .map((file) => file.content.toString()),
-        sharedStrings: files
-          .find((file) => file.path === patterns.sharedStrings)
-          ?.content.toString(),
-        images: files.filter((file) => patterns.images.test(file.path)),
-      };
-
-      const sharedStrings = this.parseSharedStrings(xmlContent.sharedStrings);
-
-      const orderedText = files
-        .map(async (file) => {
-          if (patterns.sheets.test(file.path)) {
-            return this.extractSheetText([file.content.toString()], sharedStrings);
-          } else if (patterns.drawings.test(file.path)) {
-            return this.extractDrawingText([file.content.toString()]);
-          } else if (patterns.charts.test(file.path)) {
-            return this.extractChartText([file.content.toString()]);
-          } else if (patterns.images.test(file.path)) {
-            return await this.extractImageText([file]);
-          }
-          return null;
-        })
-        .filter(Boolean);
-
-      const resolvedText = await Promise.all(orderedText);
-      return resolvedText.filter(Boolean).join('\n');
-    } catch (error) {
-      console.error('AnyExtractor: Error parsing Excel file:', error);
-      throw error;
-    }
+    return { sections, metadata };
   }
+}
 
-  private parseSharedStrings(sharedStringsXml?: string): string[] {
-    if (!sharedStringsXml) return [];
-    const tNodes = parseString(sharedStringsXml).getElementsByTagName('t');
-    return Array.from(tNodes).map((node) => node.childNodes[0]?.nodeValue ?? '');
-  }
+function sheetIndex(path: string): number {
+  const m = path.match(/sheet(\d+)\.xml$/);
+  return m ? +m[1] : 0;
+}
 
-  private extractSheetText(sheetFiles: string[], sharedStrings: string[]): string {
-    return sheetFiles
-      .map((content) => {
-        const cNodes = parseString(content).getElementsByTagName('c');
-        return Array.from(cNodes)
-          .filter((node) => this.isValidInlineString(node) || this.hasValidValueNode(node))
-          .map((node) => this.getCellValue(node, sharedStrings))
-          .join('\n');
-      })
-      .join('\n');
-  }
+function parseSharedStrings(xml?: string): string[] {
+  if (!xml) return [];
+  const tNodes = parseXml(xml).getElementsByTagName('t');
+  return Array.from(tNodes).map((n) => n.childNodes[0]?.nodeValue ?? '');
+}
 
-  private extractDrawingText(drawingFiles: string[]): string {
-    return drawingFiles
-      .map((content) => {
-        const pNodes = parseString(content).getElementsByTagName('a:p');
-        return Array.from(pNodes)
-          .map((node) => {
-            const tNodes = node.getElementsByTagName('a:t');
-            return Array.from(tNodes)
-              .map((tNode) => tNode.childNodes[0]?.nodeValue ?? '')
-              .join('');
-          })
-          .join('\n');
-      })
-      .join('\n');
-  }
+function parseSheetNames(xml?: string): string[] {
+  if (!xml) return [];
+  const nodes = parseXml(xml).getElementsByTagName('sheet');
+  return Array.from(nodes).map((n) => n.getAttribute('name') ?? '');
+}
 
-  private extractChartText(chartFiles: string[]): string {
-    return chartFiles
-      .map((content) => {
-        const vNodes = parseString(content).getElementsByTagName('c:v');
-        return Array.from(vNodes)
-          .map((node) => node.childNodes[0]?.nodeValue ?? '')
-          .join('\n');
-      })
-      .join('\n');
-  }
+function extractSheetText(xml: string, sharedStrings: string[]): string {
+  const cNodes = parseXml(xml).getElementsByTagName('c');
+  return Array.from(cNodes)
+    .filter((n) => isInlineString(n) || hasValueNode(n))
+    .map((n) => getCellValue(n, sharedStrings))
+    .join('\n');
+}
 
-  private async extractImageText(imageFiles: { path: string; content: Buffer }[]): Promise<string> {
-    const texts = await Promise.all(
-      imageFiles.map(async (file) => {
-        try {
-          return await this.anyExtractor.parseFile(file.content, null);
-        } catch (e) {
-          console.log(`AnyExtractor: Error extracting text from image ${file.path}:`, e);
-          return '';
-        }
-      }),
+function extractDrawingText(xml: string): string {
+  const pNodes = parseXml(xml).getElementsByTagName('a:p');
+  return Array.from(pNodes)
+    .map((p) =>
+      Array.from(p.getElementsByTagName('a:t'))
+        .map((t) => t.childNodes[0]?.nodeValue ?? '')
+        .join(''),
+    )
+    .join('\n');
+}
+
+function extractChartText(xml: string): string {
+  const vNodes = parseXml(xml).getElementsByTagName('c:v');
+  return Array.from(vNodes)
+    .map((n) => n.childNodes[0]?.nodeValue ?? '')
+    .join('\n');
+}
+
+function isInlineString(node: Element): boolean {
+  if (node.tagName.toLowerCase() !== 'c' || node.getAttribute('t') !== 'inlineStr') return false;
+  const is = node.getElementsByTagName('is')[0];
+  return is?.getElementsByTagName('t')[0]?.childNodes[0]?.nodeValue !== undefined;
+}
+
+function hasValueNode(node: Element): boolean {
+  return node.getElementsByTagName('v')[0]?.childNodes[0]?.nodeValue !== undefined;
+}
+
+function getCellValue(node: Element, sharedStrings: string[]): string {
+  if (isInlineString(node)) {
+    return (
+      node.getElementsByTagName('is')[0].getElementsByTagName('t')[0].childNodes[0].nodeValue ?? ''
     );
-    return texts.filter(Boolean).join('\n');
   }
-
-  private isValidInlineString(cNode: Element): boolean {
-    if (cNode.tagName.toLowerCase() !== 'c' || cNode.getAttribute('t') !== 'inlineStr')
-      return false;
-    const isNodes = cNode.getElementsByTagName('is');
-    const tNodes = isNodes[0]?.getElementsByTagName('t');
-    return tNodes?.[0]?.childNodes[0]?.nodeValue !== undefined;
-  }
-
-  private hasValidValueNode(cNode: Element): boolean {
-    const vNodes = cNode.getElementsByTagName('v');
-    return vNodes[0]?.childNodes[0]?.nodeValue !== undefined;
-  }
-
-  private getCellValue(cNode: Element, sharedStrings: string[]): string {
-    if (this.isValidInlineString(cNode)) {
-      return (
-        cNode.getElementsByTagName('is')[0].getElementsByTagName('t')[0].childNodes[0].nodeValue ??
-        ''
-      );
+  if (!hasValueNode(node)) return '';
+  const isShared = node.getAttribute('t') === 's';
+  const raw = node.getElementsByTagName('v')[0].childNodes[0].nodeValue ?? '';
+  if (isShared) {
+    const idx = parseInt(raw, 10);
+    if (idx < 0 || idx >= sharedStrings.length) {
+      throw new Error('any-extractor: invalid shared string index in xlsx');
     }
-
-    if (this.hasValidValueNode(cNode)) {
-      const isSharedString = cNode.getAttribute('t') === 's';
-      const valueIndex = parseInt(
-        cNode.getElementsByTagName('v')[0].childNodes[0].nodeValue ?? '',
-        10,
-      );
-
-      if (isSharedString) {
-        if (valueIndex >= sharedStrings.length) {
-          throw ERRORMSG.fileCorrupted('AnyExtractor: Invalid shared string index.');
-        }
-        return sharedStrings[valueIndex];
-      }
-
-      return valueIndex.toString();
-    }
-
-    return '';
+    return sharedStrings[idx];
   }
+  return raw;
+}
+
+function parseCoreProperties(xml: string): Partial<ExtractMetadata> {
+  const doc = parseXml(xml);
+  const get = (tag: string) => {
+    const el = doc.getElementsByTagName(tag)[0];
+    const v = el?.childNodes[0]?.nodeValue?.trim();
+    return v || undefined;
+  };
+  const created = get('dcterms:created');
+  const modified = get('dcterms:modified');
+  const keywords = get('cp:keywords');
+  return {
+    title: get('dc:title'),
+    author: get('dc:creator'),
+    subject: get('dc:subject'),
+    language: get('dc:language'),
+    keywords: keywords
+      ? keywords
+          .split(/[,;]/)
+          .map((k) => k.trim())
+          .filter(Boolean)
+      : undefined,
+    createdAt: created ? new Date(created) : undefined,
+    modifiedAt: modified ? new Date(modified) : undefined,
+  };
+}
+
+function guessImageMime(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase() ?? '';
+  const map: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    gif: 'image/gif',
+    webp: 'image/webp',
+    bmp: 'image/bmp',
+  };
+  return map[ext] ?? 'application/octet-stream';
 }

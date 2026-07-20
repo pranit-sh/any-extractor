@@ -1,82 +1,79 @@
-import { fetch } from 'undici';
-import yauzl from 'yauzl';
-import { ERRORMSG } from './constant';
-import { ExtractedFile } from './types';
-import concat from 'concat-stream';
-import { DOMParser } from '@xmldom/xmldom';
 import { promises as fs } from 'fs';
+import concat from 'concat-stream';
+import yauzl from 'yauzl';
+import { DOMParser } from '@xmldom/xmldom';
+import type { ExtractedFile } from './types';
 
+/** Read a local file into a Buffer. */
 export async function readFile(filePath: string): Promise<Buffer> {
-  return await fs.readFile(filePath);
+  return fs.readFile(filePath);
 }
 
-export const readFileUrl = async (url: string, basicAuth?: string | null): Promise<Buffer> => {
+/** Fetch a URL and return the response body as a Buffer. */
+export async function readFileUrl(url: string, authHeader?: string): Promise<Buffer> {
   const res = await fetch(url, {
-    headers: {
-      ...(basicAuth ? { Authorization: basicAuth } : {}),
-    },
+    headers: authHeader ? { Authorization: authHeader } : undefined,
   });
-  if (!res.ok) throw new Error(`Failed to fetch: ${res.statusText}`);
+  if (!res.ok) {
+    throw new Error(`any-extractor: failed to fetch ${url} — ${res.status} ${res.statusText}`);
+  }
   return Buffer.from(await res.arrayBuffer());
-};
+}
 
-export const extractFiles = (
-  zipInput: Buffer | string,
-  filterFn: (x: string) => boolean,
-): Promise<ExtractedFile[]> => {
-  return new Promise((res, rej) => {
-    const processZipfile = (zipfile: yauzl.ZipFile) => {
-      const extractedFiles: ExtractedFile[] = [];
-      zipfile.readEntry();
-
-      function processEntry(entry: yauzl.Entry) {
-        if (filterFn(entry.fileName)) {
-          zipfile.openReadStream(entry, (err, readStream) => {
-            if (err) return rej(err);
-
-            readStream.pipe(
-              concat((data: Buffer) => {
-                extractedFiles.push({
-                  path: entry.fileName,
-                  content: data,
-                });
-                zipfile.readEntry();
-              }),
-            );
-          });
-        } else zipfile.readEntry();
-      }
-
-      zipfile.on('entry', processEntry);
-      zipfile.on('end', () => res(extractedFiles));
-      zipfile.on('error', rej);
-    };
-
-    if (Buffer.isBuffer(zipInput)) {
-      yauzl.fromBuffer(zipInput, { lazyEntries: true }, (err, zipfile) => {
-        if (err) return rej(err);
-        processZipfile(zipfile);
-      });
-    } else if (typeof zipInput === 'string') {
-      yauzl.open(zipInput, { lazyEntries: true }, (err, zipfile) => {
-        if (err) return rej(err);
-        processZipfile(zipfile);
-      });
-    } else rej(ERRORMSG.invalidInput);
-  });
-};
-
-export const parseString = (xml: string) => {
-  const parser = new DOMParser();
-  return parser.parseFromString(xml, 'text/xml');
-};
-
+/** Return true if the given string parses as a valid absolute URL. */
 export function isValidUrl(str: string | undefined | null): boolean {
+  if (!str) return false;
   try {
-    if (!str) return false;
     new URL(str);
     return true;
   } catch {
     return false;
   }
+}
+
+/** Parse an XML string into a document. */
+export function parseXml(xml: string) {
+  return new DOMParser().parseFromString(xml, 'text/xml');
+}
+
+/** Extract selected entries from a zip buffer or path. */
+export function extractFiles(
+  zipInput: Buffer | string,
+  filterFn: (path: string) => boolean,
+): Promise<ExtractedFile[]> {
+  return new Promise((resolve, reject) => {
+    const handle = (zipfile: yauzl.ZipFile) => {
+      const out: ExtractedFile[] = [];
+      zipfile.readEntry();
+      zipfile.on('entry', (entry: yauzl.Entry) => {
+        if (!filterFn(entry.fileName)) {
+          zipfile.readEntry();
+          return;
+        }
+        zipfile.openReadStream(entry, (err, stream) => {
+          if (err) return reject(err);
+          stream.pipe(
+            concat((data: Buffer) => {
+              out.push({ path: entry.fileName, content: data });
+              zipfile.readEntry();
+            }),
+          );
+        });
+      });
+      zipfile.on('end', () => resolve(out));
+      zipfile.on('error', reject);
+    };
+
+    if (Buffer.isBuffer(zipInput)) {
+      yauzl.fromBuffer(zipInput, { lazyEntries: true }, (err, zipfile) => {
+        if (err) return reject(err);
+        handle(zipfile);
+      });
+    } else {
+      yauzl.open(zipInput, { lazyEntries: true }, (err, zipfile) => {
+        if (err) return reject(err);
+        handle(zipfile);
+      });
+    }
+  });
 }

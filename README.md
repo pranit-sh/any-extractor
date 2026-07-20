@@ -1,138 +1,209 @@
-# AnyExtractor
+# any-extractor
 
 [![NPM Version](https://img.shields.io/npm/v/any-extractor)](https://www.npmjs.com/package/any-extractor)
 [![License](https://img.shields.io/npm/l/any-extractor)](https://www.npmjs.com/package/any-extractor)
 [![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
 
-A Node.js package to extract text from files.
+A tiny, dependency-light text extractor for Node.js. One function, many file types.
 
-## Features
+```ts
+import { extractText } from 'any-extractor';
 
-- **Flexible input options:** Supports local file path, buffers, and file URLs.
-- **Auto type detection:** Automatically detects file type and extracts text using MIME type.
-- **Customizable parsers:** Allows creating new or modifying existing document parsers for any MIME types.
-- **Confluence support:** Extracts text from Confluence documents.
+const text = await extractText('./resume.pdf');
+console.log(text);
+```
 
-#### Supported Files
-
-Here's a breakdown of the text extraction capabilities for each file type:
-
-| File Type                                        | Text Extraction |
-| ------------------------------------------------ | --------------- |
-| `.docx`                                          | ✅              |
-| `.pptx`                                          | ✅              |
-| `.xlsx`                                          | ✅              |
-| `.pdf`                                           | ✅              |
-| `.odt`                                           | ✅              |
-| `.odp`                                           | ✅              |
-| `.ods`                                           | ✅              |
-| `.csv`                                           | ✅              |
-| `.txt`                                           | ✅              |
-| `.json`                                          | ✅              |
-| Plain text (e.g., `.py`,<br> `.ts`, `.md`, etc.) | ✅              |
-| `confluence`                                     | ✅              |
-
-## Installation
+## Install
 
 ```bash
 npm install any-extractor
 ```
 
-## Getting Started
+Requires Node.js **18+**.
+
+## Supported formats
+
+| Format                                | MIME type                                                                   |
+| ------------------------------------- | --------------------------------------------------------------------------- |
+| PDF (`.pdf`)                          | `application/pdf`                                                           |
+| Word (`.docx`)                        | `application/vnd.openxmlformats-officedocument.wordprocessingml.document`   |
+| Excel (`.xlsx`)                       | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`         |
+| PowerPoint (`.pptx`)                  | `application/vnd.openxmlformats-officedocument.presentationml.presentation` |
+| OpenDocument (`.odt`, `.ods`, `.odp`) | `application/vnd.oasis.opendocument.*`                                      |
+| Plain text (`.txt`, `.md`, `.csv`, …) | `text/plain`                                                                |
+| JSON (`.json`)                        | `application/json`                                                          |
+
+Unrecognized binary files throw `UnsupportedFileTypeError` — no silent failures.
+
+## Usage
+
+### From a file path
 
 ```ts
-import { getAnyExtractor } from 'any-extractor';
+import { extractText } from 'any-extractor';
 
-async function extractFromFile() {
-  const anyExt = getAnyExtractor();
-  const text = await anyExt.parseFile('./filename.docx');
-  console.log('Extracted Text:', text);
+const text = await extractText('./report.docx');
+```
+
+### From a Buffer
+
+```ts
+import { readFile } from 'node:fs/promises';
+import { extractText } from 'any-extractor';
+
+const buffer = await readFile('./slides.pptx');
+const text = await extractText(buffer);
+```
+
+### From an HTTP(S) URL
+
+```ts
+const text = await extractText('https://example.com/spec.pdf');
+```
+
+### Structured output (pages, slides, sheets, metadata)
+
+When you need provenance — e.g. for RAG, citation, or search indexing — use `extract` instead of `extractText`. You get ordered sections plus file-level metadata:
+
+```ts
+import { extract } from 'any-extractor';
+
+const { text, sections, metadata } = await extract('./deck.pptx');
+
+console.log(metadata.title, metadata.slideCount);
+for (const s of sections) {
+  console.log(`[${s.label ?? s.kind}]`, s.text);
+  s.images?.forEach((img) => console.log('  image:', img.mime, img.bytes));
+}
+```
+
+Each section carries `kind` (`page`, `slide`, `sheet`, `notes`, `footnote`, `endnote`, `body`, …), an optional `label` and 1-based `index`, and any images encountered while parsing it. `result.text` is the same string you'd get from `extractText` — so you can adopt the structured API without losing the simple case.
+
+Metadata surfaces best-effort values across formats: `title`, `author`, `subject`, `keywords`, `language`, `createdAt`, `modifiedAt`, plus format-specific counters like `pageCount` (PDF), `slideCount` (PPTX/ODP) and `sheetNames` (XLSX).
+
+### Authenticated URLs
+
+Pass either a fully-formed header string or `{ user, password }` and it will be base64-encoded for you:
+
+```ts
+await extractText('https://example.com/private.docx', {
+  auth: { user: 'alice', password: process.env.PASSWORD! },
+});
+
+// or, if you already have a header value:
+await extractText(url, { auth: 'Bearer eyJhbGc…' });
+```
+
+## Handling embedded images
+
+`any-extractor` does **not** ship any OCR or vision model. By default, images embedded in Word / Excel / PowerPoint files are skipped.
+
+If you want their contents included, provide an `onImage` callback that returns text for a given image buffer. You are responsible for the OCR / vision call — use whatever tool you like (Tesseract, a cloud OCR API, a multimodal LLM, …). The returned text is inlined into the extracted output.
+
+```ts
+import { createExtractor } from 'any-extractor';
+import { recognize } from 'tesseract.js'; // or any other OCR / vision API
+
+const extractor = createExtractor({
+  onImage: async (buffer, mime) => {
+    const { data } = await recognize(buffer, 'eng');
+    return data.text;
+  },
+});
+
+const text = await extractor.extract('./deck.pptx');
+```
+
+Return an empty string from `onImage` to skip a specific image.
+
+## Custom parsers
+
+You can register a parser for any MIME type — great for internal formats or overriding a built-in.
+
+```ts
+import { AnyExtractor, createExtractor, type FileParser } from 'any-extractor';
+
+class SqlParser implements FileParser {
+  readonly mimes = ['application/sql', 'application/hdb'] as const;
+
+  async parse(buffer: Buffer): Promise<string> {
+    return buffer.toString('utf-8'); // your custom logic here
+  }
 }
 
-extractFromFile();
+const extractor = createExtractor().addParser(new SqlParser());
+const text = await extractor.extract('./schema.sql');
 ```
 
-## Advanced Usage
+Registering a parser for a MIME type that's already handled **overrides** the built-in.
 
-#### Authorization Parameter
+## API
 
-The second argument in `parseFile`, shown as `null`, is for Basic Authentication when accessing file URLs. Format: `Basic <base64-encoded-credentials>`
+### `extractText(input, options?)`
 
-Example:
+Extract plain text from a file path, HTTP(S) URL, or Buffer.
 
-```ts
-const authString = 'Basic ' + Buffer.from('user:password').toString('base64');
-const text = await anyExt.parseFile('https://example.com/protected-file.docx', authString);
-console.log('Extracted Text:', text);
-```
+- `input`: `string | Buffer`
+- `options.auth?`: `string | { user, password }` — used only when `input` is a URL.
+- **Returns**: `Promise<string>`
+- **Throws**: `UnsupportedFileTypeError` if the file's MIME type has no parser.
 
-#### Custom Parsers:
+### `extract(input, options?)`
 
-AnyExtractor is designed with extensibility in mind, allowing you to integrate your own custom document parsers for handling specific or less common file formats, or to implement tailored text extraction logic.<br>
-To create custom parser, you will need to implement `AnyParserMethod` class with the following signature:
-
-- `mimes: string[]`: class variable which has the list of mime types for your targeted files.
-- `apply: (buffer, mime, options, config)`: class method which returns the extracted text as string.
-  - buffer: file buffer
-  - mime: mime type of the file
-  - options?: second argument of extractText method
-  - config?: argument of getAnyExtractor method
-
-Create your extractor class implementing the `AnyParserMethod`.
+Extract structured text and metadata. Same inputs as `extractText`, but returns:
 
 ```ts
-import { AnyParserMethod } from 'any-extractor';
+interface ExtractResult {
+  text: string; // concatenation of all section texts
+  sections: Section[]; // ordered, format-agnostic chunks
+  metadata: ExtractMetadata; // title, author, page/slide/sheet counts, …
+}
 
-export class CustomParser implements AnyParserMethod {
-  public mimes = ['application/hdb', 'application/sql'];
-
-  public apply = async (file: Buffer, extractorConfig: ExtractorConfig): Promise<string> => {
-    // your text extraction logic
-  };
+interface Section {
+  kind:
+    | 'body'
+    | 'page'
+    | 'slide'
+    | 'notes'
+    | 'sheet'
+    | 'footnote'
+    | 'endnote'
+    | 'header'
+    | 'footer'
+    | 'comment';
+  label?: string; // e.g. "Page 3", "Slide 2", "Sheet: Q1"
+  index?: number; // 1-based within its kind
+  text: string;
+  images?: ExtractedImage[]; // images found while parsing this section
 }
 ```
 
-Add your custom parser to any extractor instance.
+- **Returns**: `Promise<ExtractResult>`
+- **Throws**: `UnsupportedFileTypeError` if the file's MIME type has no parser.
+
+### `createExtractor(config?)`
+
+Returns a reusable `AnyExtractor` with all built-in parsers registered.
+
+- `config.onImage?`: `(buffer, mime) => Promise<string> | string` — hook invoked for every embedded image inside Office documents. Return the text you want inlined (e.g. from your own OCR call), or `""` to skip. `any-extractor` does not do OCR itself.
+
+### `class AnyExtractor`
+
+Low-level extractor with an empty parser registry. Use this if you want full control:
 
 ```ts
-const anyExt = getAnyExtractor();
-anyExt.addParser(new CustomParser());
-const text = await anyExt.extractText('./filename.sql');
-console.log('Extracted Text:', text);
-```
-
-> Creating custom parsers for existing mimetypes will overwrite the implementation.
-
-#### Confluence Crawling
-
-Extract text from Confluence documents:
-
-```ts
-const { getAnyExtractor } = require('any-extractor');
-
-async function crawlConfluence() {
-  const textExt = getAnyExtractor({
-    confluence: {
-      baseUrl: '<baseurl>',
-      email: '<username>',
-      apiKey: '<api-key>',
-    },
-  });
-
-  const result = await textExt.parseConfluenceDoc('<pageId>');
-}
-
-crawlConfluence();
+const extractor = new AnyExtractor(config).addParser(new PDFParser());
+await extractor.extract(buffer); // -> string
+await extractor.extractStructured(buffer); // -> ExtractResult
 ```
 
 ## License
 
 [MIT](https://github.com/pranit-sh/any-extractor/blob/main/LICENSE)
 
-## Report
+## Issues & discussion
 
-If you encounter bugs or have feature requests, [open an issue](https://github.com/pranit-sh/any-extractor/issues).
-Feel free to [start a discussion](https://github.com/pranit-sh/any-extractor/discussions) — whether it’s feedback, a question, or an idea!
+Found a bug or want a new format supported? [Open an issue](https://github.com/pranit-sh/any-extractor/issues) or [start a discussion](https://github.com/pranit-sh/any-extractor/discussions).
 
 ## Support
 

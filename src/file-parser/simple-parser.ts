@@ -1,9 +1,13 @@
-import { AnyParserMethod } from '../types';
+import type { FileParser } from '../types';
 
-export class SimpleParser implements AnyParserMethod {
-  mimes = ['text/plain', 'application/json'];
+/**
+ * Parser for plain-text-ish formats where the raw bytes are already UTF-8 text
+ * (e.g. `.txt`, `.json`).
+ */
+export class SimpleParser implements FileParser {
+  readonly mimes = ['text/plain', 'application/json'] as const;
 
-  apply = async (file: Buffer): Promise<string> => {
+  async parse(file: Buffer): Promise<string> {
     return file.toString('utf-8');
-  };
+  }
 }
