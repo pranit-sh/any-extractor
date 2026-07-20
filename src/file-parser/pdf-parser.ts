@@ -1,5 +1,6 @@
 import { extractText, getDocumentProxy, getMeta } from 'unpdf';
 import type { FileParser, ParserResult, Section } from '../types';
+import { splitKeywords } from './ooxml-utils';
 
 /**
  * Parser for PDF files. Uses `unpdf` (a serverless build of PDF.js) which
@@ -33,7 +34,7 @@ export class PDFParser implements FileParser {
         title: nonEmpty(info.Title),
         author: nonEmpty(info.Author),
         subject: nonEmpty(info.Subject),
-        keywords: parseKeywords(info.Keywords),
+        keywords: splitKeywords(typeof info.Keywords === 'string' ? info.Keywords : undefined),
         createdAt: toDate(info.CreationDate),
         modifiedAt: toDate(info.ModDate),
       },
@@ -43,14 +44,6 @@ export class PDFParser implements FileParser {
 
 function nonEmpty(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
-}
-
-function parseKeywords(v: unknown): string[] | undefined {
-  if (typeof v !== 'string' || !v.trim()) return undefined;
-  return v
-    .split(/[,;]/)
-    .map((k) => k.trim())
-    .filter(Boolean);
 }
 
 function toDate(v: unknown): Date | undefined {

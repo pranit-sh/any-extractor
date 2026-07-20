@@ -18,7 +18,6 @@ export type {
   ExtractorConfig,
   FileParser,
   ParserContext,
-  ParserOutput,
   ParserResult,
   Section,
   SectionKind,
@@ -40,38 +39,20 @@ export {
  * Prefer this over `new AnyExtractor()` unless you want an empty registry.
  */
 export function createExtractor(config?: ExtractorConfig): AnyExtractor {
-  const extractor = new AnyExtractor(config);
-  extractor
+  return new AnyExtractor(config)
     .addParser(new SimpleParser())
     .addParser(new PDFParser())
     .addParser(new OpenOfficeParser())
     .addParser(new WordParser())
     .addParser(new ExcelParser())
     .addParser(new PowerPointParser());
-  return extractor;
-}
-
-/**
- * Extract plain text from a file path, HTTP(S) URL, or Buffer.
- *
- * ```ts
- * const text = await extractText('./resume.pdf');
- * const text = await extractText(buffer);
- * const text = await extractText('https://example.com/file.docx', {
- *   auth: { user: 'me', password: 'secret' },
- * });
- * ```
- */
-export function extractText(input: string | Buffer, options?: ExtractOptions): Promise<string> {
-  return defaultExtractor().extract(input, options);
 }
 
 /**
  * Extract structured text and metadata from a file path, HTTP(S) URL, or Buffer.
  *
  * Returns ordered sections (pages, slides, sheets, notes, …) plus file-level
- * metadata. Use this over {@link extractText} when you need provenance for
- * RAG, citation, or search indexing.
+ * metadata. `result.text` is a plain-text concatenation of all section texts.
  *
  * ```ts
  * const { text, sections, metadata } = await extract('./deck.pptx');
@@ -81,7 +62,22 @@ export function extractText(input: string | Buffer, options?: ExtractOptions): P
  * ```
  */
 export function extract(input: string | Buffer, options?: ExtractOptions): Promise<ExtractResult> {
-  return defaultExtractor().extractStructured(input, options);
+  return defaultExtractor().extract(input, options);
+}
+
+/**
+ * Shortcut for `extract(input).then(r => r.text)` — returns just the plain text.
+ *
+ * ```ts
+ * const text = await extractText('./resume.pdf');
+ * ```
+ */
+export async function extractText(
+  input: string | Buffer,
+  options?: ExtractOptions,
+): Promise<string> {
+  const { text } = await defaultExtractor().extract(input, options);
+  return text;
 }
 
 let cached: AnyExtractor | undefined;

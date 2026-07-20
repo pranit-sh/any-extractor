@@ -1,5 +1,4 @@
 import type {
-  ExtractMetadata,
   ExtractedFile,
   ExtractedImage,
   FileParser,
@@ -8,14 +7,16 @@ import type {
   Section,
 } from '../types';
 import { extractFiles, parseXml } from '../util';
+import { guessImageMime, parseCoreProperties } from './ooxml-utils';
 
 /**
  * Parser for `.docx` (Office Open XML) files.
  *
  * Emits the main body as a `body` section, plus optional `footnote` and
- * `endnote` sections. Embedded images are attached to their containing section
- * (and their OCR text — from {@link ExtractorConfig.onImage} — is inlined
- * into `section.text` for back-compat).
+ * `endnote` sections. Embedded images are attached to their containing
+ * section as {@link ExtractedImage} entries. If {@link ExtractorConfig.onImage}
+ * is set, its return value is stored on `image.description` — it is NOT
+ * inlined into `section.text` (consumers decide how to use it).
  */
 export class WordParser implements FileParser {
   readonly mimes = [
@@ -99,7 +100,7 @@ async function extractSection(
   xml: string,
   embedMap: Record<string, string>,
   media: Record<string, ExtractedFile>,
-  onImage: ParserContext['config']['onImage'],
+  onImage: ((buf: Buffer, mime: string) => Promise<string> | string) | undefined,
 ): Promise<{ text: string; images?: ExtractedImage[] }> {
   const doc = parseXml(xml);
   const paragraphs = Array.from(doc.getElementsByTagName('w:p'));
@@ -108,10 +109,9 @@ async function extractSection(
 
   for (const p of paragraphs) {
     const texts = Array.from(p.getElementsByTagName('w:t'));
-    let line = texts.map((t) => t.childNodes[0]?.nodeValue ?? '').join('');
+    const line = texts.map((t) => t.childNodes[0]?.nodeValue ?? '').join('');
 
-    const drawings = Array.from(p.getElementsByTagName('w:drawing'));
-    for (const drawing of drawings) {
+    for (const drawing of Array.from(p.getElementsByTagName('w:drawing'))) {
       const blip = drawing.getElementsByTagName('a:blip')[0];
       const embedId = blip?.getAttribute('r:embed');
       if (!embedId || !embedMap[embedId]) continue;
@@ -128,12 +128,9 @@ async function extractSection(
       if (onImage) {
         try {
           const description = await onImage(imageFile.content, mime);
-          if (description) {
-            image.description = description;
-            line += `\n[Image: ${description}]`;
-          }
+          if (description) image.description = description;
         } catch {
-          // Follow the Excel parser policy: swallow onImage errors.
+          // Swallow onImage errors — consistent across parsers.
         }
       }
 
@@ -147,44 +144,4 @@ async function extractSection(
     text: parts.join('\n'),
     ...(images.length ? { images } : {}),
   };
-}
-
-function parseCoreProperties(xml: string): Partial<ExtractMetadata> {
-  const doc = parseXml(xml);
-  const get = (tag: string) => {
-    const el = doc.getElementsByTagName(tag)[0];
-    const v = el?.childNodes[0]?.nodeValue?.trim();
-    return v || undefined;
-  };
-  const created = get('dcterms:created');
-  const modified = get('dcterms:modified');
-  const keywords = get('cp:keywords');
-  return {
-    title: get('dc:title'),
-    author: get('dc:creator'),
-    subject: get('dc:subject'),
-    language: get('dc:language'),
-    keywords: keywords
-      ? keywords
-          .split(/[,;]/)
-          .map((k) => k.trim())
-          .filter(Boolean)
-      : undefined,
-    createdAt: created ? new Date(created) : undefined,
-    modifiedAt: modified ? new Date(modified) : undefined,
-  };
-}
-
-function guessImageMime(path: string): string {
-  const ext = path.split('.').pop()?.toLowerCase() ?? '';
-  const map: Record<string, string> = {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    bmp: 'image/bmp',
-    svg: 'image/svg+xml',
-  };
-  return map[ext] ?? 'application/octet-stream';
 }

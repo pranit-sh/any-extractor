@@ -1,13 +1,7 @@
-import { promises as fs } from 'fs';
 import concat from 'concat-stream';
 import yauzl from 'yauzl';
 import { DOMParser } from '@xmldom/xmldom';
 import type { ExtractedFile } from './types';
-
-/** Read a local file into a Buffer. */
-export async function readFile(filePath: string): Promise<Buffer> {
-  return fs.readFile(filePath);
-}
 
 /** Fetch a URL and return the response body as a Buffer. */
 export async function readFileUrl(url: string, authHeader?: string): Promise<Buffer> {
@@ -21,8 +15,7 @@ export async function readFileUrl(url: string, authHeader?: string): Promise<Buf
 }
 
 /** Return true if the given string parses as a valid absolute URL. */
-export function isValidUrl(str: string | undefined | null): boolean {
-  if (!str) return false;
+export function isValidUrl(str: string): boolean {
   try {
     new URL(str);
     return true;

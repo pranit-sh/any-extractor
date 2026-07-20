@@ -77,7 +77,7 @@ for (const s of sections) {
 }
 ```
 
-Each section carries `kind` (`page`, `slide`, `sheet`, `notes`, `footnote`, `endnote`, `body`, …), an optional `label` and 1-based `index`, and any images encountered while parsing it. `result.text` is the same string you'd get from `extractText` — so you can adopt the structured API without losing the simple case.
+Each section carries `kind` (`body`, `page`, `slide`, `sheet`, `notes`, `footnote`, `endnote`), an optional `label` and 1-based `index`, and any images encountered while parsing it. `result.text` is the same string you'd get from `extractText` — so you can adopt the structured API without losing the simple case.
 
 Metadata surfaces best-effort values across formats: `title`, `author`, `subject`, `keywords`, `language`, `createdAt`, `modifiedAt`, plus format-specific counters like `pageCount` (PDF), `slideCount` (PPTX/ODP) and `sheetNames` (XLSX).
 
@@ -96,9 +96,9 @@ await extractText(url, { auth: 'Bearer eyJhbGc…' });
 
 ## Handling embedded images
 
-`any-extractor` does **not** ship any OCR or vision model. By default, images embedded in Word / Excel / PowerPoint files are skipped.
+`any-extractor` does **not** ship any OCR or vision model. Embedded images in Word / Excel / PowerPoint files are surfaced as `ExtractedImage` entries on their section (with `mime`, `path`, `bytes`) — but the pixels are not decoded.
 
-If you want their contents included, provide an `onImage` callback that returns text for a given image buffer. You are responsible for the OCR / vision call — use whatever tool you like (Tesseract, a cloud OCR API, a multimodal LLM, …). The returned text is inlined into the extracted output.
+If you want a text description for each image, provide an `onImage` callback. You are responsible for the OCR / vision call — use whatever tool you like (Tesseract, a cloud OCR API, a multimodal LLM, …). The returned string is stored on `image.description`; consumers decide how to use it.
 
 ```ts
 import { createExtractor } from 'any-extractor';
@@ -111,7 +111,10 @@ const extractor = createExtractor({
   },
 });
 
-const text = await extractor.extract('./deck.pptx');
+const { sections } = await extractor.extract('./deck.pptx');
+for (const s of sections) {
+  s.images?.forEach((img) => console.log(img.path, img.description));
+}
 ```
 
 Return an empty string from `onImage` to skip a specific image.
@@ -121,18 +124,18 @@ Return an empty string from `onImage` to skip a specific image.
 You can register a parser for any MIME type — great for internal formats or overriding a built-in.
 
 ```ts
-import { AnyExtractor, createExtractor, type FileParser } from 'any-extractor';
+import { createExtractor, type FileParser, type ParserResult } from 'any-extractor';
 
 class SqlParser implements FileParser {
   readonly mimes = ['application/sql', 'application/hdb'] as const;
 
-  async parse(buffer: Buffer): Promise<string> {
-    return buffer.toString('utf-8'); // your custom logic here
+  async parse(buffer: Buffer): Promise<ParserResult> {
+    return { sections: [{ kind: 'body', text: buffer.toString('utf-8') }] };
   }
 }
 
 const extractor = createExtractor().addParser(new SqlParser());
-const text = await extractor.extract('./schema.sql');
+const { text } = await extractor.extract('./schema.sql');
 ```
 
 Registering a parser for a MIME type that's already handled **overrides** the built-in.
@@ -160,17 +163,7 @@ interface ExtractResult {
 }
 
 interface Section {
-  kind:
-    | 'body'
-    | 'page'
-    | 'slide'
-    | 'notes'
-    | 'sheet'
-    | 'footnote'
-    | 'endnote'
-    | 'header'
-    | 'footer'
-    | 'comment';
+  kind: 'body' | 'page' | 'slide' | 'notes' | 'sheet' | 'footnote' | 'endnote';
   label?: string; // e.g. "Page 3", "Slide 2", "Sheet: Q1"
   index?: number; // 1-based within its kind
   text: string;
@@ -185,7 +178,7 @@ interface Section {
 
 Returns a reusable `AnyExtractor` with all built-in parsers registered.
 
-- `config.onImage?`: `(buffer, mime) => Promise<string> | string` — hook invoked for every embedded image inside Office documents. Return the text you want inlined (e.g. from your own OCR call), or `""` to skip. `any-extractor` does not do OCR itself.
+- `config.onImage?`: `(buffer, mime) => Promise<string> | string` — hook invoked for every embedded image inside Office documents. Return the text to store on `image.description`, or `""` to skip. `any-extractor` does not do OCR itself.
 
 ### `class AnyExtractor`
 
@@ -193,8 +186,7 @@ Low-level extractor with an empty parser registry. Use this if you want full con
 
 ```ts
 const extractor = new AnyExtractor(config).addParser(new PDFParser());
-await extractor.extract(buffer); // -> string
-await extractor.extractStructured(buffer); // -> ExtractResult
+const { text, sections, metadata } = await extractor.extract(buffer);
 ```
 
 ## License

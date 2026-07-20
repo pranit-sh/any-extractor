@@ -3,11 +3,6 @@
  *
  * Implement this interface to add support for new file formats via
  * {@link AnyExtractor.addParser}.
- *
- * A parser may return either:
- * - a plain string (simple case — the core will wrap it in a single `body`
- *   section), or
- * - a {@link ParserResult} object with structured sections and metadata.
  */
 export interface FileParser {
   /** MIME types this parser handles (e.g. `['application/pdf']`). */
@@ -19,16 +14,8 @@ export interface FileParser {
    * @param file    Raw file bytes.
    * @param context Extractor context (config, recursive parse helper).
    */
-  parse(file: Buffer, context: ParserContext): Promise<ParserOutput>;
+  parse(file: Buffer, context: ParserContext): Promise<ParserResult>;
 }
-
-/**
- * The value a {@link FileParser.parse} implementation may return.
- *
- * - `string`: legacy shape — treated as a single `body` section.
- * - {@link ParserResult}: structured sections plus optional metadata.
- */
-export type ParserOutput = string | ParserResult;
 
 /** Structured output from a {@link FileParser}. */
 export interface ParserResult {
@@ -56,16 +43,15 @@ export interface ExtractOptions {
 export interface ExtractorConfig {
   /**
    * Optional callback invoked for every embedded image found while parsing
-   * Word / Excel / PowerPoint files. Return the extracted text (e.g. via OCR)
-   * or an empty string to skip. If omitted, images are silently ignored.
+   * Word / Excel / PowerPoint files. Return a text description (e.g. from
+   * OCR or a vision model) to attach to the {@link ExtractedImage}, or an
+   * empty string to skip. If omitted, images are surfaced as
+   * {@link ExtractedImage} entries without a `description`.
    */
   onImage?: (image: Buffer, mime: string) => Promise<string> | string;
 }
 
-/**
- * Context object passed to every {@link FileParser.parse} call.
- * @internal
- */
+/** Context object passed to every {@link FileParser.parse} call. */
 export interface ParserContext {
   config: ExtractorConfig;
   /** Recursively extract text from an embedded buffer (used by container formats). */
@@ -79,13 +65,13 @@ export interface ExtractedFile {
 }
 
 // ---------------------------------------------------------------------------
-// Structured output
+// Result shape
 // ---------------------------------------------------------------------------
 
 /**
- * The result of a structured extraction. Contains ordered, format-agnostic
- * sections plus file-level metadata. `text` is a convenience concatenation
- * for callers that just want a blob.
+ * The result of an extraction. Contains ordered, format-agnostic sections
+ * plus file-level metadata. `text` is a convenience concatenation for
+ * callers that just want a blob.
  */
 export interface ExtractResult {
   /** Convenience: concatenation of all section texts, joined by "\n\n". */
@@ -114,17 +100,7 @@ export interface Section {
 }
 
 /** The categories of content a section can represent. */
-export type SectionKind =
-  | 'body'
-  | 'page'
-  | 'slide'
-  | 'notes'
-  | 'sheet'
-  | 'footnote'
-  | 'endnote'
-  | 'header'
-  | 'footer'
-  | 'comment';
+export type SectionKind = 'body' | 'page' | 'slide' | 'notes' | 'sheet' | 'footnote' | 'endnote';
 
 /** An image referenced from a section. */
 export interface ExtractedImage {
@@ -138,7 +114,7 @@ export interface ExtractedImage {
   description?: string;
 }
 
-/** File-level metadata surfaced by structured extraction. */
+/** File-level metadata surfaced by extraction. */
 export interface ExtractMetadata {
   /** Detected MIME type of the input. */
   mime: string;
