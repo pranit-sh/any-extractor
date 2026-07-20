@@ -9,25 +9,23 @@ export interface FileParser {
   readonly mimes: readonly string[];
 
   /**
-   * Extract text (and optionally structure) from the given file buffer.
+   * Extract structured content from the given file buffer.
    *
    * @param file    Raw file bytes.
-   * @param context Extractor context (config, recursive parse helper).
+   * @param context Extractor context (config, block factory, recursive parse helper).
    */
   parse(file: Buffer, context: ParserContext): Promise<ParserResult>;
 }
 
 /** Structured output from a {@link FileParser}. */
 export interface ParserResult {
-  /** Ordered chunks of text with provenance. */
+  /** Ordered sections (pages, slides, sheets, notes, …). */
   sections: Section[];
   /** Format-specific metadata (page counts, sheet names, core props, …). */
   metadata?: Partial<ExtractMetadata>;
 }
 
-/**
- * Options passed to {@link extractText} or {@link AnyExtractor.extract}.
- */
+/** Options passed to {@link extract} or {@link AnyExtractor.extract}. */
 export interface ExtractOptions {
   /**
    * Authorization header value used when `input` is an HTTP(S) URL.
@@ -37,25 +35,24 @@ export interface ExtractOptions {
   auth?: string | { user: string; password: string };
 }
 
-/**
- * Configuration for an {@link AnyExtractor} instance.
- */
-export interface ExtractorConfig {
-  /**
-   * Optional callback invoked for every embedded image found while parsing
-   * Word / Excel / PowerPoint files. Return a text description (e.g. from
-   * OCR or a vision model) to attach to the {@link ExtractedImage}, or an
-   * empty string to skip. If omitted, images are surfaced as
-   * {@link ExtractedImage} entries without a `description`.
-   */
-  onImage?: (image: Buffer, mime: string) => Promise<string> | string;
-}
-
 /** Context object passed to every {@link FileParser.parse} call. */
 export interface ParserContext {
-  config: ExtractorConfig;
-  /** Recursively extract text from an embedded buffer (used by container formats). */
+  /** Block factory — creates typed blocks with stable ids and positions. */
+  block: BlockFactory;
+  /**
+   * Recursively extract markdown from an embedded buffer. Throws
+   * {@link UnsupportedFileTypeError} if no parser is registered for the
+   * detected MIME type.
+   */
   extract(buffer: Buffer): Promise<string>;
+  /**
+   * Best-effort variant of {@link extract}. Attempts to extract markdown
+   * from an embedded buffer (typically an image), returning an empty
+   * string if no parser is registered for its MIME type. Useful for
+   * enriching image blocks with descriptions when the user has plugged
+   * in a custom vision / OCR parser.
+   */
+  describe(buffer: Buffer): Promise<string>;
 }
 
 /** @internal */
@@ -70,49 +67,171 @@ export interface ExtractedFile {
 
 /**
  * The result of an extraction. Contains ordered, format-agnostic sections
- * plus file-level metadata. `text` is a convenience concatenation for
- * callers that just want a blob.
+ * rendered as markdown, plus file-level metadata.
  */
 export interface ExtractResult {
-  /** Convenience: concatenation of all section texts, joined by "\n\n". */
-  text: string;
-  /** Ordered, format-agnostic chunks with provenance. */
+  /** Full document rendered as GFM markdown. */
+  markdown: string;
+  /** Ordered, format-agnostic sections with structured blocks. */
   sections: Section[];
   /** File-level metadata. Fields are best-effort — unknowns are omitted. */
   metadata: ExtractMetadata;
 }
 
 /**
- * A single chunk of extracted content. Parsers pick the closest {@link SectionKind}
- * for the content they emit.
+ * A section is a logical container inside a document (page, slide, sheet,
+ * body, notes, …). Every section carries a tree of structured blocks and a
+ * markdown rendering of those blocks.
  */
 export interface Section {
-  /** What kind of chunk this is. */
+  /** What kind of section this is. */
   kind: SectionKind;
   /** Human-readable label, e.g. "Page 3", "Slide 2", "Sheet: Q1 Sales". */
   label?: string;
   /** 1-based index within its kind (e.g. page number, slide number). */
   index?: number;
-  /** The plain text of this section (already trimmed / normalized). */
-  text: string;
-  /** Images encountered while parsing this section. */
-  images?: ExtractedImage[];
+  /** Structured content, in reading order. */
+  blocks: Block[];
+  /** GFM markdown rendering of `blocks`. */
+  markdown: string;
 }
 
 /** The categories of content a section can represent. */
 export type SectionKind = 'body' | 'page' | 'slide' | 'notes' | 'sheet' | 'footnote' | 'endnote';
 
-/** An image referenced from a section. */
-export interface ExtractedImage {
-  /** MIME of the image bytes, e.g. "image/png". */
+// ---------------------------------------------------------------------------
+// Block model
+// ---------------------------------------------------------------------------
+
+/** A structured chunk of content inside a section. */
+export type Block =
+  | HeadingBlock
+  | ParagraphBlock
+  | ListBlock
+  | TableBlock
+  | CodeBlock
+  | QuoteBlock
+  | ImageBlock
+  | DividerBlock;
+
+/** The kind discriminator for {@link Block}. */
+export type BlockKind = Block['type'];
+
+/** Shared fields on every block. */
+export interface BlockBase {
+  /** Stable, content-derived id. */
+  id: string;
+  /** Where the block came from. All fields best-effort. */
+  position: BlockPosition;
+}
+
+/** Provenance for a block. */
+export interface BlockPosition {
+  /** 1-based page or slide number. */
+  page?: number;
+  /** Heading breadcrumb, e.g. `["Chapter 2", "1.3 Results"]`. */
+  sectionPath?: string[];
+}
+
+export interface HeadingBlock extends BlockBase {
+  type: 'heading';
+  level: 1 | 2 | 3 | 4 | 5 | 6;
+  text: string;
+}
+
+export interface ParagraphBlock extends BlockBase {
+  type: 'paragraph';
+  runs: InlineRun[];
+}
+
+/** An inline text run with optional formatting. */
+export interface InlineRun {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  code?: boolean;
+  /** If present, the run is rendered as a link. */
+  href?: string;
+}
+
+export interface ListBlock extends BlockBase {
+  type: 'list';
+  ordered: boolean;
+  items: ListItem[];
+}
+
+export interface ListItem {
+  runs: InlineRun[];
+  /** Nested blocks (typically sub-lists). */
+  children?: Block[];
+}
+
+export interface TableBlock extends BlockBase {
+  type: 'table';
+  /** Optional header row. */
+  headers?: string[];
+  /** Body rows as stringified cells (for markdown). */
+  rows: string[][];
+  /** Original typed values (numbers, dates, booleans) when known. */
+  raw?: unknown[][];
+}
+
+export interface CodeBlock extends BlockBase {
+  type: 'code';
+  /** Language hint for the fenced code block. */
+  language?: string;
+  code: string;
+}
+
+export interface QuoteBlock extends BlockBase {
+  type: 'quote';
+  text: string;
+}
+
+export interface ImageBlock extends BlockBase {
+  type: 'image';
   mime: string;
-  /** Filename inside the container, e.g. "word/media/image1.png". */
+  /** Path inside the container, e.g. `word/media/image1.png`. */
   path?: string;
-  /** Size in bytes. */
   bytes: number;
-  /** Text returned by the `onImage` callback (OCR / vision), if any. */
+  /** Alt text, from the document if available. */
+  alt?: string;
+  /** Description of the image (e.g. produced by a custom image parser). */
   description?: string;
 }
+
+export interface DividerBlock extends BlockBase {
+  type: 'divider';
+}
+
+// ---------------------------------------------------------------------------
+// Block factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Ergonomic constructors for blocks. Parsers should use these instead of
+ * building block objects by hand so ids and positions stay consistent.
+ */
+export interface BlockFactory {
+  heading(level: HeadingBlock['level'], text: string, pos?: BlockPosition): HeadingBlock;
+  paragraph(runs: InlineRun[] | string, pos?: BlockPosition): ParagraphBlock;
+  list(items: ListItem[], opts?: { ordered?: boolean } & BlockPosition): ListBlock;
+  table(
+    rows: string[][],
+    opts?: { headers?: string[]; raw?: unknown[][] } & BlockPosition,
+  ): TableBlock;
+  code(code: string, opts?: { language?: string } & BlockPosition): CodeBlock;
+  quote(text: string, pos?: BlockPosition): QuoteBlock;
+  image(
+    args: { mime: string; path?: string; bytes: number; alt?: string; description?: string },
+    pos?: BlockPosition,
+  ): ImageBlock;
+  divider(pos?: BlockPosition): DividerBlock;
+}
+
+// ---------------------------------------------------------------------------
+// Metadata
+// ---------------------------------------------------------------------------
 
 /** File-level metadata surfaced by extraction. */
 export interface ExtractMetadata {

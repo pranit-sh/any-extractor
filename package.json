@@ -1,7 +1,7 @@
 {
   "name": "any-extractor",
-  "version": "2.0.4",
-  "description": "A tiny, dependency-light text extractor for PDF, Word, Excel, PowerPoint, OpenDocument and plain-text files.",
+  "version": "3.0.0",
+  "description": "Structured document extraction for AI agents — GFM markdown, typed block tree, and positional metadata for PDF, Word, Excel, PowerPoint, OpenDocument, HTML, JSON, CSV, and plain text.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -30,12 +30,22 @@
     ]
   },
   "keywords": [
+    "ai",
+    "agent",
+    "llm",
+    "rag",
+    "markdown",
+    "structured-extraction",
+    "document-parser",
     "text-extraction",
     "pdf",
     "docx",
     "xlsx",
     "pptx",
     "odt",
+    "html",
+    "csv",
+    "json",
     "file-parser"
   ],
   "author": "Pranit Deshmukh",

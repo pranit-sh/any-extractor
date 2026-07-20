@@ -7,22 +7,9 @@ import {
   SimpleParser,
   WordParser,
 } from './file-parser';
-import type { ExtractOptions, ExtractResult, ExtractorConfig } from './types';
+import type { ExtractOptions, ExtractResult } from './types';
 
 export { AnyExtractor } from './extractors/any-extractor';
-export type {
-  ExtractedImage,
-  ExtractMetadata,
-  ExtractOptions,
-  ExtractResult,
-  ExtractorConfig,
-  FileParser,
-  ParserContext,
-  ParserResult,
-  Section,
-  SectionKind,
-} from './types';
-export { UnsupportedFileTypeError } from './types';
 export {
   ExcelParser,
   OpenOfficeParser,
@@ -31,15 +18,48 @@ export {
   SimpleParser,
   WordParser,
 } from './file-parser';
+export { createBlockFactory, makeSection } from './blocks';
+export type {
+  Block,
+  BlockBase,
+  BlockFactory,
+  BlockKind,
+  BlockPosition,
+  CodeBlock,
+  DividerBlock,
+  ExtractMetadata,
+  ExtractOptions,
+  ExtractResult,
+  FileParser,
+  HeadingBlock,
+  ImageBlock,
+  InlineRun,
+  ListBlock,
+  ListItem,
+  ParagraphBlock,
+  ParserContext,
+  ParserResult,
+  QuoteBlock,
+  Section,
+  SectionKind,
+  TableBlock,
+} from './types';
+export { UnsupportedFileTypeError } from './types';
 
 /**
  * Build a fully-configured {@link AnyExtractor} with all built-in parsers
- * registered (Word, Excel, PowerPoint, PDF, OpenOffice, plain text/JSON).
+ * registered (Word, Excel, PowerPoint, PDF, OpenOffice, text/HTML/JSON/CSV).
  *
- * Prefer this over `new AnyExtractor()` unless you want an empty registry.
+ * Use this if you want to register custom parsers (e.g. an image captioner)
+ * or hold onto a reusable instance:
+ *
+ * ```ts
+ * const extractor = createExtractor().addParser(myImageParser);
+ * const { markdown } = await extractor.extract('./deck.pptx');
+ * ```
  */
-export function createExtractor(config?: ExtractorConfig): AnyExtractor {
-  return new AnyExtractor(config)
+export function createExtractor(): AnyExtractor {
+  return new AnyExtractor()
     .addParser(new SimpleParser())
     .addParser(new PDFParser())
     .addParser(new OpenOfficeParser())
@@ -49,35 +69,16 @@ export function createExtractor(config?: ExtractorConfig): AnyExtractor {
 }
 
 /**
- * Extract structured text and metadata from a file path, HTTP(S) URL, or Buffer.
- *
- * Returns ordered sections (pages, slides, sheets, notes, …) plus file-level
- * metadata. `result.text` is a plain-text concatenation of all section texts.
+ * Extract structured blocks, markdown, and metadata from a file path,
+ * HTTP(S) URL, or Buffer.
  *
  * ```ts
- * const { text, sections, metadata } = await extract('./deck.pptx');
- * for (const s of sections) {
- *   console.log(s.label, s.text);
- * }
+ * const { markdown, sections, metadata } = await extract('./deck.pptx');
+ * console.log(markdown);
  * ```
  */
 export function extract(input: string | Buffer, options?: ExtractOptions): Promise<ExtractResult> {
   return defaultExtractor().extract(input, options);
-}
-
-/**
- * Shortcut for `extract(input).then(r => r.text)` — returns just the plain text.
- *
- * ```ts
- * const text = await extractText('./resume.pdf');
- * ```
- */
-export async function extractText(
-  input: string | Buffer,
-  options?: ExtractOptions,
-): Promise<string> {
-  const { text } = await defaultExtractor().extract(input, options);
-  return text;
 }
 
 let cached: AnyExtractor | undefined;

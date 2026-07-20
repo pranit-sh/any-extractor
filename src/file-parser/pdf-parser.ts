@@ -1,30 +1,32 @@
 import { extractText, getDocumentProxy, getMeta } from 'unpdf';
-import type { FileParser, ParserResult, Section } from '../types';
+import { makeSection } from '../blocks';
+import type { Block, FileParser, ParserContext, ParserResult, Section } from '../types';
 import { splitKeywords } from './ooxml-utils';
 
 /**
- * Parser for PDF files. Uses `unpdf` (a serverless build of PDF.js) which
- * works in Node.js, Deno, Bun, browsers and edge runtimes.
+ * Parser for PDF files. Uses `unpdf` (serverless PDF.js).
  *
- * Emits one {@link Section} per page (`kind: 'page'`) and surfaces document
- * info (title, author, timestamps, page count) as metadata.
+ * Emits one {@link Section} per page (`kind: 'page'`). Each page's text is
+ * split into paragraph blocks on blank lines, so line-wrapped paragraphs
+ * stay coherent for downstream chunkers.
  */
 export class PDFParser implements FileParser {
   readonly mimes = ['application/pdf'] as const;
 
-  async parse(file: Buffer): Promise<ParserResult> {
+  async parse(file: Buffer, ctx: ParserContext): Promise<ParserResult> {
     const pdf = await getDocumentProxy(new Uint8Array(file));
     const [{ text: pages, totalPages }, meta] = await Promise.all([
       extractText(pdf, { mergePages: false }),
       getMeta(pdf).catch(() => undefined),
     ]);
 
-    const sections: Section[] = pages.map((pageText, i) => ({
-      kind: 'page',
-      index: i + 1,
-      label: `Page ${i + 1}`,
-      text: pageText.trim(),
-    }));
+    const sections: Section[] = pages.map((pageText, i) => {
+      const page = i + 1;
+      const blocks = paragraphize(pageText).map<Block>((chunk) =>
+        ctx.block.paragraph(chunk, { page }),
+      );
+      return makeSection('page', blocks, { index: page, label: `Page ${page}` });
+    });
 
     const info = meta?.info ?? {};
     return {
@@ -42,6 +44,18 @@ export class PDFParser implements FileParser {
   }
 }
 
+/**
+ * Split a raw page string into paragraph-sized chunks. Blank lines start a
+ * new paragraph; internal line breaks are joined with a space so wrapped
+ * lines re-flow correctly.
+ */
+function paragraphize(raw: string): string[] {
+  return raw
+    .split(/\n\s*\n+/)
+    .map((chunk) => chunk.replace(/\s*\n\s*/g, ' ').trim())
+    .filter(Boolean);
+}
+
 function nonEmpty(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
@@ -49,7 +63,6 @@ function nonEmpty(v: unknown): string | undefined {
 function toDate(v: unknown): Date | undefined {
   if (v instanceof Date) return v;
   if (typeof v !== 'string') return undefined;
-  // PDF date format: D:YYYYMMDDHHmmSSOHH'mm'
   const m = v.match(/^D?:?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?/);
   if (!m) {
     const d = new Date(v);

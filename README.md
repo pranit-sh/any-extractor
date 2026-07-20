@@ -4,14 +4,31 @@
 [![License](https://img.shields.io/npm/l/any-extractor)](https://www.npmjs.com/package/any-extractor)
 [![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
 
-A tiny, dependency-light text extractor for Node.js. One function, many file types.
+Structured document extraction for AI agents. Feed PDFs, Word docs,
+spreadsheets, slides, and text into your LLM as clean **GitHub-flavored
+markdown** — plus a typed **block tree** with positional metadata (page
+numbers, section paths, slide indexes) when you need more than a flat string.
 
 ```ts
-import { extractText } from 'any-extractor';
+import { extract } from 'any-extractor';
 
-const text = await extractText('./resume.pdf');
-console.log(text);
+const { markdown } = await extract('./resume.pdf');
+console.log(markdown);
 ```
+
+## Why
+
+LLMs and RAG pipelines need consistent, structured input across formats. Raw
+text loses tables, headings, and layout. `any-extractor` gives you:
+
+- **Markdown-first output** — GFM tables, headings, lists, code, quotes,
+  images. Drop-in for any chat completion API.
+- **Structured blocks** — every table, heading, list item is a typed `Block`
+  with a stable id and position (`page`, `sectionPath`). Chunk, cite, or
+  re-render however you like.
+- **One API, many formats** — PDF, DOCX, XLSX, PPTX, ODF, plain text, HTML,
+  JSON, CSV, Markdown.
+- **Tiny surface** — two functions cover 90% of use cases. No config required.
 
 ## Install
 
@@ -23,180 +40,170 @@ Requires Node.js **18+**.
 
 ## Supported formats
 
-| Format                                | MIME type                                                                   |
+| Format                                | MIME                                                                        |
 | ------------------------------------- | --------------------------------------------------------------------------- |
 | PDF (`.pdf`)                          | `application/pdf`                                                           |
 | Word (`.docx`)                        | `application/vnd.openxmlformats-officedocument.wordprocessingml.document`   |
 | Excel (`.xlsx`)                       | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`         |
 | PowerPoint (`.pptx`)                  | `application/vnd.openxmlformats-officedocument.presentationml.presentation` |
 | OpenDocument (`.odt`, `.ods`, `.odp`) | `application/vnd.oasis.opendocument.*`                                      |
-| Plain text (`.txt`, `.md`, `.csv`, …) | `text/plain`                                                                |
+| Plain text / Markdown (`.txt`, `.md`) | `text/plain`, `text/markdown`                                               |
+| HTML (`.html`)                        | `text/html`                                                                 |
+| CSV (`.csv`)                          | `text/csv`                                                                  |
 | JSON (`.json`)                        | `application/json`                                                          |
 
-Unrecognized binary files throw `UnsupportedFileTypeError` — no silent failures.
+Unrecognized binary files throw `UnsupportedFileTypeError` — no silent
+fallbacks.
 
-## Usage
+## Quick start
 
-### From a file path
-
-```ts
-import { extractText } from 'any-extractor';
-
-const text = await extractText('./report.docx');
-```
-
-### From a Buffer
-
-```ts
-import { readFile } from 'node:fs/promises';
-import { extractText } from 'any-extractor';
-
-const buffer = await readFile('./slides.pptx');
-const text = await extractText(buffer);
-```
-
-### From an HTTP(S) URL
-
-```ts
-const text = await extractText('https://example.com/spec.pdf');
-```
-
-### Structured output (pages, slides, sheets, metadata)
-
-When you need provenance — e.g. for RAG, citation, or search indexing — use `extract` instead of `extractText`. You get ordered sections plus file-level metadata:
+### Just the markdown
 
 ```ts
 import { extract } from 'any-extractor';
 
-const { text, sections, metadata } = await extract('./deck.pptx');
+const { markdown } = await extract('./quarterly-report.pdf');
+// send `markdown` to your LLM
+```
 
-console.log(metadata.title, metadata.slideCount);
-for (const s of sections) {
-  console.log(`[${s.label ?? s.kind}]`, s.text);
-  s.images?.forEach((img) => console.log('  image:', img.mime, img.bytes));
+### The full structured result
+
+```ts
+import { extract } from 'any-extractor';
+
+const { markdown, sections, metadata } = await extract('./deck.pptx');
+
+for (const section of sections) {
+  console.log(section.kind, section.label, section.blocks.length);
 }
 ```
 
-Each section carries `kind` (`body`, `page`, `slide`, `sheet`, `notes`, `footnote`, `endnote`), an optional `label` and 1-based `index`, and any images encountered while parsing it. `result.text` is the same string you'd get from `extractText` — so you can adopt the structured API without losing the simple case.
-
-Metadata surfaces best-effort values across formats: `title`, `author`, `subject`, `keywords`, `language`, `createdAt`, `modifiedAt`, plus format-specific counters like `pageCount` (PDF), `slideCount` (PPTX/ODP) and `sheetNames` (XLSX).
-
-### Authenticated URLs
-
-Pass either a fully-formed header string or `{ user, password }` and it will be base64-encoded for you:
+### From a `Buffer` or a URL
 
 ```ts
-await extractText('https://example.com/private.docx', {
-  auth: { user: 'alice', password: process.env.PASSWORD! },
-});
-
-// or, if you already have a header value:
-await extractText(url, { auth: 'Bearer eyJhbGc…' });
+await extract(fs.readFileSync('./doc.docx'));
+await extract('https://example.com/report.pdf');
 ```
 
-## Handling embedded images
+## The block model
 
-`any-extractor` does **not** ship any OCR or vision model. Embedded images in Word / Excel / PowerPoint files are surfaced as `ExtractedImage` entries on their section (with `mime`, `path`, `bytes`) — but the pixels are not decoded.
-
-If you want a text description for each image, provide an `onImage` callback. You are responsible for the OCR / vision call — use whatever tool you like (Tesseract, a cloud OCR API, a multimodal LLM, …). The returned string is stored on `image.description`; consumers decide how to use it.
+Every parser normalizes its input into the same shape:
 
 ```ts
-import { createExtractor } from 'any-extractor';
-import { recognize } from 'tesseract.js'; // or any other OCR / vision API
+type ExtractResult = {
+  markdown: string; // full document, GFM
+  sections: Section[]; // pages / sheets / slides / chapters
+  metadata: ExtractMetadata; // title, author, mime, dates, custom
+};
 
-const extractor = createExtractor({
-  onImage: async (buffer, mime) => {
-    const { data } = await recognize(buffer, 'eng');
-    return data.text;
-  },
-});
+type Section = {
+  kind: 'page' | 'sheet' | 'slide' | 'chapter' | 'notes' | 'body';
+  label?: string; // e.g. sheet name, slide title
+  index?: number; // 1-based
+  blocks: Block[];
+  markdown: string; // pre-rendered markdown for this section
+};
 
-const { sections } = await extractor.extract('./deck.pptx');
-for (const s of sections) {
-  s.images?.forEach((img) => console.log(img.path, img.description));
-}
+type Block =
+  | HeadingBlock // { level: 1–6, runs }
+  | ParagraphBlock // { runs }
+  | ListBlock // { ordered, items: ListItem[] }
+  | TableBlock // { headers?, rows, raw? }
+  | CodeBlock // { language?, text }
+  | QuoteBlock // { blocks }
+  | ImageBlock // { alt?, src?, mime?, data? }
+  | DividerBlock;
 ```
 
-Return an empty string from `onImage` to skip a specific image.
-
-## Custom parsers
-
-You can register a parser for any MIME type — great for internal formats or overriding a built-in.
+Every block carries:
 
 ```ts
-import { createExtractor, type FileParser, type ParserResult } from 'any-extractor';
-
-class SqlParser implements FileParser {
-  readonly mimes = ['application/sql', 'application/hdb'] as const;
-
-  async parse(buffer: Buffer): Promise<ParserResult> {
-    return { sections: [{ kind: 'body', text: buffer.toString('utf-8') }] };
-  }
-}
-
-const extractor = createExtractor().addParser(new SqlParser());
-const { text } = await extractor.extract('./schema.sql');
+type BlockBase = {
+  id: string; // stable sha1(content) — good for chunk keys
+  position: {
+    page?: number; // PDF page / slide index / sheet index
+    sectionPath?: string[]; // heading trail: ['H1', 'H2.1', ...]
+  };
+};
 ```
 
-Registering a parser for a MIME type that's already handled **overrides** the built-in.
+**Why this matters for agents:** you can chunk by section, cite by block id,
+or filter by `position.page` when the LLM asks "what does page 3 say?".
 
 ## API
 
-### `extractText(input, options?)`
+### `extract(input, options?) → Promise<ExtractResult>`
 
-Extract plain text from a file path, HTTP(S) URL, or Buffer.
+Extracts structured blocks, markdown, and metadata from a file path, URL, or
+`Buffer`. The `options` object currently only carries `auth` for HTTP(S)
+inputs (`auth: 'Basic ...'` or `auth: { user, password }`).
 
-- `input`: `string | Buffer`
-- `options.auth?`: `string | { user, password }` — used only when `input` is a URL.
-- **Returns**: `Promise<string>`
-- **Throws**: `UnsupportedFileTypeError` if the file's MIME type has no parser.
+### `createExtractor() → AnyExtractor`
 
-### `extract(input, options?)`
-
-Extract structured text and metadata. Same inputs as `extractText`, but returns:
+Build a reusable extractor with all built-in parsers registered. Chain
+`.addParser(...)` to plug in your own.
 
 ```ts
-interface ExtractResult {
-  text: string; // concatenation of all section texts
-  sections: Section[]; // ordered, format-agnostic chunks
-  metadata: ExtractMetadata; // title, author, page/slide/sheet counts, …
-}
+import { createExtractor, type FileParser } from 'any-extractor';
 
-interface Section {
-  kind: 'body' | 'page' | 'slide' | 'notes' | 'sheet' | 'footnote' | 'endnote';
-  label?: string; // e.g. "Page 3", "Slide 2", "Sheet: Q1"
-  index?: number; // 1-based within its kind
-  text: string;
-  images?: ExtractedImage[]; // images found while parsing this section
-}
+const extractor = createExtractor().addParser(myCustomParser);
+
+const result = await extractor.extract('./thing.foo');
 ```
 
-- **Returns**: `Promise<ExtractResult>`
-- **Throws**: `UnsupportedFileTypeError` if the file's MIME type has no parser.
+## Custom parsers
 
-### `createExtractor(config?)`
-
-Returns a reusable `AnyExtractor` with all built-in parsers registered.
-
-- `config.onImage?`: `(buffer, mime) => Promise<string> | string` — hook invoked for every embedded image inside Office documents. Return the text to store on `image.description`, or `""` to skip. `any-extractor` does not do OCR itself.
-
-### `class AnyExtractor`
-
-Low-level extractor with an empty parser registry. Use this if you want full control:
+Implement `FileParser` to handle additional formats. Anything you register
+also participates in **recursive extraction** — for example, register an
+image parser and every image embedded in Word/Excel/PowerPoint automatically
+gets its markdown attached to `ImageBlock.description`.
 
 ```ts
-const extractor = new AnyExtractor(config).addParser(new PDFParser());
-const { text, sections, metadata } = await extractor.extract(buffer);
+import type { FileParser, ParserContext, ParserResult } from 'any-extractor';
+
+const yamlParser: FileParser = {
+  name: 'yaml',
+  supports(mime) {
+    return mime === 'application/x-yaml' || mime === 'text/yaml';
+  },
+  async parse(buf, ctx: ParserContext): Promise<ParserResult> {
+    return {
+      sections: [
+        {
+          kind: 'body',
+          blocks: [ctx.block.code(buf.toString('utf8'), { language: 'yaml' })],
+          markdown: '',
+        },
+      ],
+    };
+  },
+};
+```
+
+### Image captioning via a custom parser
+
+Want vision-model captions on embedded images? Register a parser for image
+MIME types. The built-in Word/Excel/PowerPoint parsers call `ctx.describe(buf)`
+for every embedded image; if a matching parser exists, its markdown becomes
+the image's `description`. If not, the image is passed through untouched.
+
+```ts
+const imageCaptioner: FileParser = {
+  name: 'image-caption',
+  supports(mime) {
+    return mime.startsWith('image/');
+  },
+  async parse(buf, ctx: ParserContext): Promise<ParserResult> {
+    const caption = await myVisionModel.describe(buf); // your call
+    return {
+      sections: [{ kind: 'body', blocks: [ctx.block.paragraph(caption)], markdown: '' }],
+    };
+  },
+};
+
+const extractor = createExtractor().addParser(imageCaptioner);
 ```
 
 ## License
 
-[MIT](https://github.com/pranit-sh/any-extractor/blob/main/LICENSE)
-
-## Issues & discussion
-
-Found a bug or want a new format supported? [Open an issue](https://github.com/pranit-sh/any-extractor/issues) or [start a discussion](https://github.com/pranit-sh/any-extractor/discussions).
-
-## Support
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-BD5FFF?style=flat&logo=buy-me-a-coffee&logoColor=ffffff&labelColor=BD5FFF)](https://www.buymeacoffee.com/pranit.sh)
+Apache-2.0

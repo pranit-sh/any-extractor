@@ -1,12 +1,23 @@
 import type { Element, Node } from '@xmldom/xmldom';
-import type { ExtractMetadata, FileParser, ParserResult, Section } from '../types';
+import { makeSection } from '../blocks';
+import type {
+  Block,
+  BlockPosition,
+  ExtractMetadata,
+  FileParser,
+  ListItem,
+  ParserContext,
+  ParserResult,
+  Section,
+} from '../types';
 import { extractFiles, parseXml } from '../util';
 
 /**
  * Parser for OpenDocument formats: `.odt`, `.ods`, `.odp`, `.odg`, `.odf`.
  *
  * Emits a `body` section for the main content and a separate `notes` section
- * for `.odp` speaker notes. Core metadata is read from `meta.xml`.
+ * for `.odp` speaker notes. Content is parsed into structured blocks
+ * (headings, paragraphs, lists, tables). Metadata is read from `meta.xml`.
  */
 export class OpenOfficeParser implements FileParser {
   readonly mimes = [
@@ -17,12 +28,10 @@ export class OpenOfficeParser implements FileParser {
     'application/vnd.oasis.opendocument.formula',
   ] as const;
 
-  async parse(file: Buffer): Promise<ParserResult> {
+  async parse(file: Buffer, ctx: ParserContext): Promise<ParserResult> {
     const MAIN = 'content.xml';
     const META = 'meta.xml';
     const OBJECT_CONTENT = /Object \d+\/content\.xml/;
-    const ALLOWED_TAGS = ['text:p', 'text:h'];
-    const NOTES_TAG = 'presentation:notes';
 
     const files = await extractFiles(
       file,
@@ -33,64 +42,130 @@ export class OpenOfficeParser implements FileParser {
       .filter((f) => f.path === MAIN || OBJECT_CONTENT.test(f.path))
       .sort((a, b) => a.path.localeCompare(b.path));
 
-    const notesText: string[] = [];
-    const bodyChunks: string[] = [];
-
-    const isNotesNode = (n: Element): boolean =>
-      n.tagName === NOTES_TAG ? true : n.parentNode ? isNotesNode(n.parentNode as Element) : false;
-
-    const isInsideAllowedTag = (n: Element): boolean =>
-      ALLOWED_TAGS.includes(n.tagName)
-        ? true
-        : n.parentNode
-          ? isInsideAllowedTag(n.parentNode as Element)
-          : false;
-
-    const traverse = (node: Node, out: string[], first: boolean): void => {
-      if (!node.childNodes || node.childNodes.length === 0) {
-        const parent = node.parentNode as Element | null;
-        if (parent && parent.tagName?.startsWith('text') && node.nodeValue) {
-          const target = isNotesNode(parent) ? notesText : out;
-          target.push(node.nodeValue);
-          if (ALLOWED_TAGS.includes(parent.tagName) && !first) target.push('\n');
-        }
-        return;
-      }
-      for (let i = 0; i < node.childNodes.length; i++) {
-        traverse(node.childNodes[i], out, false);
-      }
-    };
+    const bodyBlocks: Block[] = [];
+    const notesBlocks: Block[] = [];
+    const headingStack: string[] = [];
 
     for (const cf of contentFiles) {
       const doc = parseXml(cf.content.toString());
-      const nodes = Array.from(doc.getElementsByTagName('*')).filter(
-        (n) => ALLOWED_TAGS.includes(n.tagName) && !isInsideAllowedTag(n.parentNode as Element),
-      );
-
-      const chunk = nodes
-        .map((n) => {
-          const acc: string[] = [];
-          traverse(n, acc, true);
-          return acc.join('');
-        })
-        .filter((t) => t.trim() !== '')
-        .join('\n');
-
-      if (chunk) bodyChunks.push(chunk);
+      const body =
+        doc.getElementsByTagName('office:body')[0] ??
+        doc.getElementsByTagName('office:text')[0] ??
+        doc.documentElement;
+      if (!body) continue;
+      walk(body as Element, {
+        headingStack,
+        push: bodyBlocks,
+        pushNotes: notesBlocks,
+        ctx,
+      });
     }
 
     const sections: Section[] = [];
-    const bodyText = bodyChunks.join('\n\n');
-    if (bodyText) sections.push({ kind: 'body', text: bodyText });
-    const notes = notesText.join('').trim();
-    if (notes) sections.push({ kind: 'notes', label: 'Notes', text: notes });
+    if (bodyBlocks.length) sections.push(makeSection('body', bodyBlocks));
+    if (notesBlocks.length) sections.push(makeSection('notes', notesBlocks, { label: 'Notes' }));
 
     const metaFile = files.find((f) => f.path === META);
     const metadata = metaFile ? parseMeta(metaFile.content.toString()) : {};
-
     return { sections, metadata };
   }
 }
+
+// ---------------------------------------------------------------------------
+// Walker
+// ---------------------------------------------------------------------------
+
+interface Walker {
+  headingStack: string[];
+  push: Block[];
+  pushNotes: Block[];
+  ctx: ParserContext;
+}
+
+function walk(node: Element, w: Walker, insideNotes = false): void {
+  for (const c of Array.from(node.childNodes)) {
+    if (c.nodeType !== 1) continue;
+    const el = c as Element;
+    const tag = el.tagName;
+
+    if (tag === 'presentation:notes') {
+      walk(el, w, true);
+      continue;
+    }
+
+    const target = insideNotes ? w.pushNotes : w.push;
+    const pos: BlockPosition = w.headingStack.length ? { sectionPath: [...w.headingStack] } : {};
+
+    if (tag === 'text:h') {
+      const level = clampLevel(Number(el.getAttribute('text:outline-level') ?? '1'));
+      const text = collectText(el).trim();
+      while (w.headingStack.length >= level) w.headingStack.pop();
+      if (text) {
+        target.push(w.ctx.block.heading(level, text, pos));
+        w.headingStack.push(text);
+      }
+    } else if (tag === 'text:p') {
+      const text = collectText(el).trim();
+      if (text) target.push(w.ctx.block.paragraph(text, pos));
+    } else if (tag === 'text:list') {
+      const items = collectListItems(el);
+      if (items.length) target.push(w.ctx.block.list(items, { ordered: false, ...pos }));
+    } else if (tag === 'table:table') {
+      const rows = collectTable(el);
+      if (rows.length) {
+        target.push(w.ctx.block.table(rows.slice(1), { headers: rows[0], ...pos }));
+      }
+    } else {
+      walk(el, w, insideNotes);
+    }
+  }
+}
+
+function clampLevel(n: number): 1 | 2 | 3 | 4 | 5 | 6 {
+  if (!Number.isFinite(n) || n < 1) return 1;
+  if (n > 6) return 6;
+  return n as 1 | 2 | 3 | 4 | 5 | 6;
+}
+
+function collectText(node: Node): string {
+  let out = '';
+  for (const c of Array.from(node.childNodes ?? [])) {
+    if (c.nodeType === 3) out += c.nodeValue ?? '';
+    else if (c.nodeType === 1) out += collectText(c);
+  }
+  return out;
+}
+
+function collectListItems(list: Element): ListItem[] {
+  const items: ListItem[] = [];
+  for (const c of Array.from(list.childNodes)) {
+    if (c.nodeType !== 1) continue;
+    const el = c as Element;
+    if (el.tagName !== 'text:list-item') continue;
+    const paragraphs = Array.from(el.getElementsByTagName('text:p')).map((p) =>
+      collectText(p).trim(),
+    );
+    const text = paragraphs.filter(Boolean).join(' ');
+    if (text) items.push({ runs: [{ text }] });
+  }
+  return items;
+}
+
+function collectTable(tbl: Element): string[][] {
+  const rows: string[][] = [];
+  for (const r of Array.from(tbl.getElementsByTagName('table:table-row'))) {
+    const row: string[] = [];
+    for (const cell of Array.from(r.getElementsByTagName('table:table-cell'))) {
+      row.push(collectText(cell).trim());
+    }
+    if (row.length) rows.push(row);
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// Metadata
+// ---------------------------------------------------------------------------
 
 function parseMeta(xml: string): Partial<ExtractMetadata> {
   const doc = parseXml(xml);
@@ -101,8 +176,7 @@ function parseMeta(xml: string): Partial<ExtractMetadata> {
   };
   const created = get('meta:creation-date');
   const modified = get('dc:date');
-  const keywordEls = Array.from(doc.getElementsByTagName('meta:keyword'));
-  const keywords = keywordEls
+  const keywords = Array.from(doc.getElementsByTagName('meta:keyword'))
     .map((n) => n.childNodes[0]?.nodeValue?.trim())
     .filter((s): s is string => Boolean(s));
   return {
