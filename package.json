@@ -1,6 +1,6 @@
 {
   "name": "any-extractor",
-  "version": "2.0.5",
+  "version": "3.0.0",
   "description": "Turn any document (PDF, Word, Excel, PowerPoint, OpenDocument, HTML, JSON, CSV, text) into agent-ready markdown, typed blocks, and metadata — one call, with an optional custom-parser hook for vision LLMs and bespoke formats.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

@@ -1,3 +1,12 @@
+# [3.0.0](https://github.com/pranit-sh/any-extractor/compare/v2.0.5...v3.0.0) (2026-07-21)
+
+- feat!: return structured blocks from extract() BREAKING CHANGE: extract() now returns { markdown, blocks, metadata } instead of a plain string. ([#6](https://github.com/pranit-sh/any-extractor/issues/6)) ([c496a23](https://github.com/pranit-sh/any-extractor/commit/c496a23f58e6381057fdde6a8ab136862ca4a335))
+
+### BREAKING CHANGES
+
+- extract() now returns { markdown, blocks, metadata }
+  instead of a plain string.
+
 ## [2.0.5](https://github.com/pranit-sh/any-extractor/compare/v2.0.4...v2.0.5) (2026-02-23)
 
 ### Bug Fixes
