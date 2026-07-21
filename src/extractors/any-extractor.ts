@@ -1,6 +1,12 @@
 import { promises as fs } from 'fs';
 import { parse as detectMime } from 'file-type-mime';
-import { createBlockFactory, renderMarkdown, SECTION_SEPARATOR } from '../blocks';
+import {
+  createBlockFactory,
+  renderMarkdown,
+  renderText,
+  SECTION_SEPARATOR,
+  TEXT_SECTION_SEPARATOR,
+} from '../blocks';
 import {
   ExcelParser,
   OpenOfficeParser,
@@ -144,13 +150,15 @@ async function toBuffer(input: string | Buffer): Promise<{ buffer: Buffer; sourc
 }
 
 /**
- * Assemble an {@link ExtractResult} whose `markdown` property is rendered
- * lazily on first access and cached thereafter. Callers who never touch
- * `markdown` pay no rendering cost, and the block arrays remain the
- * single source of truth — no duplicated section-level markdown strings.
+ * Assemble an {@link ExtractResult} whose `markdown` and `text`
+ * properties are rendered lazily on first access and cached thereafter.
+ * Callers who never touch them pay no rendering cost, and the block
+ * arrays remain the single source of truth — no duplicated section-level
+ * strings.
  */
 function buildResult(sections: Section[], metadata: ExtractMetadata): ExtractResult {
   let cachedMarkdown: string | undefined;
+  let cachedText: string | undefined;
   const result = { sections, metadata } as ExtractResult;
   Object.defineProperty(result, 'markdown', {
     enumerable: true,
@@ -163,6 +171,19 @@ function buildResult(sections: Section[], metadata: ExtractMetadata): ExtractRes
           .join(SECTION_SEPARATOR);
       }
       return cachedMarkdown;
+    },
+  });
+  Object.defineProperty(result, 'text', {
+    enumerable: true,
+    configurable: false,
+    get(): string {
+      if (cachedText === undefined) {
+        cachedText = sections
+          .map((s) => renderText(s.blocks))
+          .filter(Boolean)
+          .join(TEXT_SECTION_SEPARATOR);
+      }
+      return cachedText;
     },
   });
   return result;

@@ -8,6 +8,7 @@ import {
   UnsupportedFileTypeError,
   extract,
   toMarkdown,
+  toText,
   type FileParser,
 } from '../src/index';
 
@@ -529,5 +530,112 @@ describe('result shape – lazy markdown, no per-section duplicate', () => {
     expect(rendered).toMatch(/^# Title/m);
     // Same helper works on a raw block array too.
     expect(toMarkdown(result.sections[0].blocks)).toBe(rendered);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Plain-text rendering: `result.text` and `toText`
+// ---------------------------------------------------------------------------
+
+describe('plain text rendering – result.text and toText', () => {
+  it('exposes `result.text` as a stable, cached getter with no markdown syntax', async () => {
+    const result = await extract(
+      Buffer.from('# Title\n\nBody **bold** and *italic* and `code`', 'utf-8'),
+    );
+    const a = result.text;
+    const b = result.text;
+    expect(a).toBe(b); // cached
+
+    expect(a).toContain('Title');
+    expect(a).toContain('Body bold and italic and code');
+    // No markdown scaffolding survives.
+    expect(a).not.toMatch(/[#*_`]/);
+  });
+
+  it('strips inline markdown from paragraphs and list items', async () => {
+    const extractor = new AnyExtractor().addParser({
+      mimes: ['text/plain'],
+      parse: async (_buf, ctx) => ({
+        sections: [
+          {
+            kind: 'body',
+            blocks: [
+              ctx.block.heading(1, 'Report'),
+              ctx.block.paragraph('Sales up **18%** (see [table 3](#t3)).'),
+              ctx.block.list(['first **item**', '`inline` code', '[link](https://x)']),
+            ],
+          },
+        ],
+      }),
+    });
+    const result = await extractor.extract(Buffer.from('anything', 'utf-8'));
+
+    expect(result.text).toBe(
+      ['Report', 'Sales up 18% (see table 3).', 'first item\ninline code\nlink'].join('\n\n'),
+    );
+  });
+
+  it('renders tables as tab-separated rows (headers first when present)', async () => {
+    const extractor = new AnyExtractor().addParser({
+      mimes: ['text/plain'],
+      parse: async (_buf, ctx) => ({
+        sections: [
+          {
+            kind: 'body',
+            blocks: [
+              ctx.block.table(
+                [
+                  ['APAC', '100'],
+                  ['EMEA', '200'],
+                ],
+                { headers: ['Region', 'Revenue'] },
+              ),
+            ],
+          },
+        ],
+      }),
+    });
+    const result = await extractor.extract(Buffer.from('anything', 'utf-8'));
+    expect(result.text).toBe('Region\tRevenue\nAPAC\t100\nEMEA\t200');
+  });
+
+  it('separates sections with a blank line and no divider', async () => {
+    const extractor = new AnyExtractor().addParser({
+      mimes: ['text/plain'],
+      parse: async (_buf, ctx) => ({
+        sections: [
+          { kind: 'page', index: 1, blocks: [ctx.block.paragraph('one')] },
+          { kind: 'page', index: 2, blocks: [ctx.block.paragraph('two')] },
+        ],
+      }),
+    });
+    const result = await extractor.extract(Buffer.from('anything', 'utf-8'));
+    expect(result.text).toBe('one\n\n\ntwo');
+    expect(result.text).not.toContain('---');
+  });
+
+  it('`toText` accepts a Section or a raw Block[] and matches the section render', async () => {
+    const result = await extract(Buffer.from('# Title\n\nBody paragraph', 'utf-8'));
+    const viaSection = toText(result.sections[0]);
+    const viaBlocks = toText(result.sections[0].blocks);
+    expect(viaSection).toBe(viaBlocks);
+    expect(viaSection).toContain('Title');
+    expect(viaSection).toContain('Body paragraph');
+  });
+
+  it('leaves word-internal underscores and stars alone', async () => {
+    const extractor = new AnyExtractor().addParser({
+      mimes: ['text/plain'],
+      parse: async (_buf, ctx) => ({
+        sections: [
+          {
+            kind: 'body',
+            blocks: [ctx.block.paragraph('snake_case_name and 2*3*4 and file_a_b')],
+          },
+        ],
+      }),
+    });
+    const result = await extractor.extract(Buffer.from('anything', 'utf-8'));
+    expect(result.text).toBe('snake_case_name and 2*3*4 and file_a_b');
   });
 });

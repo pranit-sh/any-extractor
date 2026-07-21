@@ -3,13 +3,15 @@
  *
  * The extractor turns any supported document into:
  * - a single GFM markdown string (`markdown`, rendered lazily on access),
+ * - a plain-text string (`text`, also lazy) for callers that don't want
+ *   markdown syntax,
  * - ordered {@link Section}s (pages / sheets / slides / body), and
  * - typed {@link Block}s inside each section, with page/sectionPath
  *   provenance so agents can cite and filter.
  *
- * `blocks` is the single source of truth; markdown is derived from it via
- * {@link toMarkdown} (or the lazy `result.markdown` getter). This keeps the
- * result compact — no duplicate copies of every paragraph in memory.
+ * `blocks` is the single source of truth; `markdown` and `text` are
+ * derived from it via {@link toMarkdown} / {@link toText} (or the lazy
+ * getters on the result). Nothing is duplicated in memory unless read.
  */
 
 // ---------------------------------------------------------------------------
@@ -18,15 +20,21 @@
 
 /**
  * The result of an extraction. Ordered sections of structured blocks plus
- * file-level metadata, with a lazily-rendered full-document markdown view.
+ * file-level metadata, with lazily-rendered full-document markdown and
+ * plain-text views.
  */
 export interface ExtractResult {
   /**
-   * Full document rendered as GFM markdown. Computed on first access from
-   * `sections` and cached — accessing it is free after the first read, and
-   * costs nothing if you never touch it.
+   * Full document rendered as GFM markdown. Computed on first access
+   * from `sections` and cached. Free if you never touch it.
    */
   readonly markdown: string;
+  /**
+   * Full document as plain reading-order text — no markdown syntax, no
+   * bullets, no pipes. Lazy and cached like `markdown`. Useful for
+   * embeddings, search indices, TTS, and cheap token counts.
+   */
+  readonly text: string;
   /** Ordered, format-agnostic sections with structured blocks. */
   sections: Section[];
   /** File-level metadata. Unknown fields are omitted. */

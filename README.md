@@ -6,18 +6,19 @@
 [![license](https://img.shields.io/npm/l/any-extractor.svg)](./LICENSE)
 [![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
 
-`any-extractor` turns whatever file you point it at into three things:
+`any-extractor` turns whatever file you point it at into four things:
 
 1. **`markdown`** — a single GFM string, rendered lazily from the blocks below and ready to hand to an LLM.
-2. **`sections`** — ordered pages / slides / sheets / body sections, each with typed blocks. The single source of truth.
-3. **`metadata`** — MIME type, title, author, page/slide counts, sheet names.
+2. **`text`** — plain reading-order text (no markdown syntax), also lazy. Useful for embeddings, search indices, TTS, or cheap token counts.
+3. **`sections`** — ordered pages / slides / sheets / body sections, each with typed blocks. The single source of truth.
+4. **`metadata`** — MIME type, title, author, page/slide counts, sheet names.
 
 Input can be a file path, URL, or `Buffer`. MIME type is detected automatically. Custom parsers can be registered via `AnyExtractor.addParser()` to override built-ins or add new MIME handlers (see [Custom parsers](#custom-parsers)).
 
 > **What's new in 3.0**
 >
 > - Full rewrite around a five-block model (`heading`, `paragraph`, `list`, `table`, `image`) with stable content-derived ids.
-> - Blocks are the single source of truth; `result.markdown` renders on demand (cached after first access) so the payload no longer carries duplicate copies of every paragraph. Use the `toMarkdown(section)` helper for per-section rendering.
+> - Blocks are the single source of truth; `result.markdown` and `result.text` render on demand (cached after first access) so the payload no longer carries duplicate copies of every paragraph. Use `toMarkdown(section)` / `toText(section)` for per-section rendering.
 > - New `AnyExtractor` class with `addParser()` — plug in your own MIME handlers (e.g. a vision LLM for images) without forking.
 > - Image parsers automatically enrich embedded images inside Word, PowerPoint, and OpenDocument files, rendered as blockquote captions in the output markdown.
 > - `UnsupportedFileTypeError` for anything without a parser, so failures are explicit.
@@ -39,7 +40,8 @@ import { extract } from 'any-extractor';
 const result = await extract('./quarterly-report.pdf');
 
 console.log(result.metadata.pageCount); // 42
-console.log(result.markdown.slice(0, 200));
+console.log(result.markdown.slice(0, 200)); // GFM
+console.log(result.text.slice(0, 200)); // plain text, no markdown syntax
 
 for (const section of result.sections) {
   console.log(section.kind, section.label); // "page", "Page 3"
@@ -70,6 +72,8 @@ for (const section of result.sections) {
 interface ExtractResult {
   /** Full document as GFM. Rendered on first access, cached thereafter. */
   readonly markdown: string;
+  /** Full document as plain text — no markdown syntax. Lazy and cached. */
+  readonly text: string;
   sections: Section[];
   metadata: ExtractMetadata;
 }
@@ -92,21 +96,39 @@ interface ExtractMetadata {
 }
 ```
 
-`Section` does not carry a rendered markdown string — that would duplicate every paragraph in memory and on the wire. Render on demand with `toMarkdown`:
+`Section` does not carry a rendered markdown/text string — that would duplicate every paragraph in memory and on the wire. Render on demand:
 
 ```ts
-import { extract, toMarkdown } from 'any-extractor';
+import { extract, toMarkdown, toText } from 'any-extractor';
 
 const result = await extract('./report.pdf');
 
-// Full document (lazy, cached):
+// Full document, in either form (lazy, cached):
 console.log(result.markdown);
+console.log(result.text);
 
 // Per section, only when you need it:
 for (const section of result.sections) {
   console.log(toMarkdown(section));
+  console.log(toText(section));
 }
 ```
+
+### Markdown vs. plain text
+
+| Output            | What you get                                                          | Good for                                                   |
+| ----------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `result.markdown` | GFM: headings, lists, tables, blockquote captions, inline `**` / `*`. | LLM prompts, human review, anything that renders markdown. |
+| `result.text`     | Reading-order text. Bullets, pipes, and inline syntax stripped.       | Embeddings, keyword search, TTS, cheap token counts.       |
+
+Rules for the plain-text render (deterministic, no third-party dependencies):
+
+- Headings appear as bare lines.
+- Paragraphs and list items have inline markdown (`**bold**`, `*italic*`, `` `code` ``, `[label](url)`) stripped to their visible characters. Word-internal underscores (`snake_case`) are left alone.
+- Lists are one item per line, no bullet or number.
+- Tables become tab-separated rows (headers first, when present). Newlines inside cells are collapsed to spaces so each row stays on one line.
+- Images render as their `alt` (or parser-supplied `text`) if any; empty images produce no output.
+- Blocks are separated by a blank line; sections by two blank lines (no `---` divider).
 
 ## The block model
 
