@@ -127,6 +127,7 @@ export class ExcelParser implements FileParser {
         makeSection('sheet', blocks, {
           index: i + 1,
           label: `Sheet: ${name}`,
+          sectionPath: [name],
         }),
       );
     }

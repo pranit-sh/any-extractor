@@ -7,7 +7,7 @@ import {
   SimpleParser,
   WordParser,
 } from './file-parser';
-import type { ExtractOptions, ExtractResult } from './types';
+import type { ExtractResult } from './types';
 
 export { AnyExtractor } from './extractors/any-extractor';
 export {
@@ -18,7 +18,7 @@ export {
   SimpleParser,
   WordParser,
 } from './file-parser';
-export { createBlockFactory, makeSection } from './blocks';
+export { createBlockFactory, buildTree, makeSection, renderMarkdown } from './blocks';
 export type {
   Block,
   BlockBase,
@@ -28,7 +28,6 @@ export type {
   CodeBlock,
   DividerBlock,
   ExtractMetadata,
-  ExtractOptions,
   ExtractResult,
   FileParser,
   HeadingBlock,
@@ -42,6 +41,7 @@ export type {
   QuoteBlock,
   Section,
   SectionKind,
+  SectionNode,
   TableBlock,
 } from './types';
 export { UnsupportedFileTypeError } from './types';
@@ -77,8 +77,8 @@ export function createExtractor(): AnyExtractor {
  * console.log(markdown);
  * ```
  */
-export function extract(input: string | Buffer, options?: ExtractOptions): Promise<ExtractResult> {
-  return defaultExtractor().extract(input, options);
+export function extract(input: string | Buffer): Promise<ExtractResult> {
+  return defaultExtractor().extract(input);
 }
 
 let cached: AnyExtractor | undefined;

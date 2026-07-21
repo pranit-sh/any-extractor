@@ -25,16 +25,6 @@ export interface ParserResult {
   metadata?: Partial<ExtractMetadata>;
 }
 
-/** Options passed to {@link extract} or {@link AnyExtractor.extract}. */
-export interface ExtractOptions {
-  /**
-   * Authorization header value used when `input` is an HTTP(S) URL.
-   * Accepts a full header string (e.g. `"Basic dXNlcjpwYXNz"`) or a
-   * `{ user, password }` pair which is base64-encoded for you.
-   */
-  auth?: string | { user: string; password: string };
-}
-
 /** Context object passed to every {@link FileParser.parse} call. */
 export interface ParserContext {
   /** Block factory — creates typed blocks with stable ids and positions. */
@@ -80,8 +70,9 @@ export interface ExtractResult {
 
 /**
  * A section is a logical container inside a document (page, slide, sheet,
- * body, notes, …). Every section carries a tree of structured blocks and a
- * markdown rendering of those blocks.
+ * body, notes, …). Every section carries an ordered list of structured
+ * blocks, a heading-rooted tree view of those blocks, and a markdown
+ * rendering.
  */
 export interface Section {
   /** What kind of section this is. */
@@ -90,10 +81,47 @@ export interface Section {
   label?: string;
   /** 1-based index within its kind (e.g. page number, slide number). */
   index?: number;
+  /**
+   * Heading breadcrumb for this section, if the section itself is nested
+   * under a broader structural context (e.g. a sheet name for XLSX).
+   * Empty for top-level sections like PDF pages.
+   */
+  sectionPath?: string[];
   /** Structured content, in reading order. */
   blocks: Block[];
+  /**
+   * Heading-rooted tree view of `blocks`. Non-heading blocks live under the
+   * nearest preceding heading; content before any heading (or sections that
+   * have no headings at all) sits under a synthetic root node.
+   *
+   * Same content as `blocks`, just re-shaped for programmatic traversal.
+   */
+  tree: SectionNode[];
   /** GFM markdown rendering of `blocks`. */
   markdown: string;
+}
+
+/**
+ * A node in the heading-rooted tree produced by {@link Section.tree}.
+ *
+ * - Regular nodes (`level` 1–6) correspond to a heading block and hold every
+ *   non-heading block that follows it until the next heading of equal or
+ *   shallower level.
+ * - A synthetic root node has `level: 0` and `heading: undefined`. It is
+ *   only produced when a section has content before its first heading (or
+ *   no headings at all), so callers never lose data.
+ */
+export interface SectionNode {
+  /** Heading depth (1–6) or `0` for the synthetic root. */
+  level: 0 | 1 | 2 | 3 | 4 | 5 | 6;
+  /** The heading block that opened this node. Absent on the synthetic root. */
+  heading?: HeadingBlock;
+  /** Convenience alias for `heading?.text`. Absent on the synthetic root. */
+  title?: string;
+  /** Non-heading blocks directly under this heading, in reading order. */
+  blocks: Block[];
+  /** Deeper headings nested under this one. */
+  children: SectionNode[];
 }
 
 /** The categories of content a section can represent. */

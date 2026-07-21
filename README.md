@@ -26,6 +26,10 @@ text loses tables, headings, and layout. `any-extractor` gives you:
 - **Structured blocks** — every table, heading, list item is a typed `Block`
   with a stable id and position (`page`, `sectionPath`). Chunk, cite, or
   re-render however you like.
+- **Heading-rooted tree** — every section exposes a `tree` view so agents
+  can grab "everything under `## Results`" without re-parsing markdown.
+- **Layout-aware PDF reading order** — multi-column pages are split into
+  columns and serialized top-to-bottom, left-to-right.
 - **One API, many formats** — PDF, DOCX, XLSX, PPTX, ODF, plain text, HTML,
   JSON, CSV, Markdown.
 - **Tiny surface** — two functions cover 90% of use cases. No config required.
@@ -100,7 +104,9 @@ type Section = {
   kind: 'page' | 'sheet' | 'slide' | 'chapter' | 'notes' | 'body';
   label?: string; // e.g. sheet name, slide title
   index?: number; // 1-based
-  blocks: Block[];
+  sectionPath?: string[]; // e.g. ['Q1 Sales'] for an XLSX sheet
+  blocks: Block[]; // flat, in reading order
+  tree: SectionNode[]; // heading-rooted view of the same blocks
   markdown: string; // pre-rendered markdown for this section
 };
 
@@ -130,13 +136,47 @@ type BlockBase = {
 **Why this matters for agents:** you can chunk by section, cite by block id,
 or filter by `position.page` when the LLM asks "what does page 3 say?".
 
+### Traversing by heading — `Section.tree`
+
+`section.blocks` is the flat, in-order stream. When you want to reason about
+document structure — "give me everything under `## Results`" — walk
+`section.tree` instead:
+
+```ts
+type SectionNode = {
+  level: 0 | 1 | 2 | 3 | 4 | 5 | 6; // 0 = synthetic root for pre-heading content
+  heading?: HeadingBlock; // undefined only on the synthetic root
+  title?: string; // convenience alias for heading.text
+  blocks: Block[]; // non-heading blocks directly under this heading
+  children: SectionNode[]; // deeper headings nested here
+};
+
+for (const node of section.tree) {
+  console.log('  '.repeat(node.level) + (node.title ?? '(preamble)'));
+}
+```
+
+The tree preserves every block in `section.blocks` — nothing is dropped or
+duplicated, just reshaped. Need it standalone? Import `buildTree`:
+
+```ts
+import { buildTree } from 'any-extractor';
+const tree = buildTree(someBlocks);
+```
+
 ## API
 
-### `extract(input, options?) → Promise<ExtractResult>`
+### `extract(input) → Promise<ExtractResult>`
 
 Extracts structured blocks, markdown, and metadata from a file path, URL, or
-`Buffer`. The `options` object currently only carries `auth` for HTTP(S)
-inputs (`auth: 'Basic ...'` or `auth: { user, password }`).
+`Buffer`. URL fetching is credential-free — if you need custom headers, auth,
+cookies, or proxies, fetch the bytes yourself and pass the resulting
+`Buffer`:
+
+```ts
+const buf = Buffer.from(await (await fetch(url, { headers })).arrayBuffer());
+const { markdown } = await extract(buf);
+```
 
 ### `createExtractor() → AnyExtractor`
 

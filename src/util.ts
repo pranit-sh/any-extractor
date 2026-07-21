@@ -4,10 +4,8 @@ import { DOMParser } from '@xmldom/xmldom';
 import type { ExtractedFile } from './types';
 
 /** Fetch a URL and return the response body as a Buffer. */
-export async function readFileUrl(url: string, authHeader?: string): Promise<Buffer> {
-  const res = await fetch(url, {
-    headers: authHeader ? { Authorization: authHeader } : undefined,
-  });
+export async function readFileUrl(url: string): Promise<Buffer> {
+  const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`any-extractor: failed to fetch ${url} — ${res.status} ${res.statusText}`);
   }
