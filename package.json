@@ -1,7 +1,7 @@
 {
   "name": "any-extractor",
   "version": "3.0.0",
-  "description": "Turn any document (PDF, Word, Excel, PowerPoint, OpenDocument, HTML, JSON, CSV, text) into agent-ready markdown, typed blocks, and metadata — one call, no plugins.",
+  "description": "Turn any document (PDF, Word, Excel, PowerPoint, OpenDocument, HTML, JSON, CSV, text) into agent-ready markdown, typed blocks, and metadata — one call, with an optional custom-parser hook for vision LLMs and bespoke formats.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
@@ -38,6 +38,9 @@
     "structured-extraction",
     "document-parser",
     "text-extraction",
+    "vision-llm",
+    "ocr",
+    "custom-parser",
     "pdf",
     "docx",
     "xlsx",
@@ -76,7 +79,6 @@
     "@semantic-release/github": "^11.0.1",
     "@semantic-release/npm": "^12.0.1",
     "@semantic-release/release-notes-generator": "^14.0.3",
-    "@types/concat-stream": "^2.0.3",
     "@types/node": "^22.14.0",
     "@types/yauzl": "^2.10.3",
     "@typescript-eslint/eslint-plugin": "^8.31.0",
@@ -97,7 +99,6 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.8",
-    "concat-stream": "^2.0.0",
     "file-type-mime": "^0.4.6",
     "unpdf": "^1.6.2",
     "yauzl": "^3.2.0"

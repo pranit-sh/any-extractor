@@ -13,6 +13,13 @@
 
 No streaming APIs. No chunking. No footguns. It parses the file and gives you clean, structured output — and if you want to bolt in your own parser (vision LLM for images, custom XML dialect, whatever), there's a one-liner for that too.
 
+> **What's new in 3.0**
+>
+> - Full rewrite around a five-block model (`heading`, `paragraph`, `list`, `table`, `image`) with per-section markdown and stable content-derived ids.
+> - New `AnyExtractor` class with `addParser()` — plug in your own MIME handlers (e.g. a vision LLM for images) without forking.
+> - Image parsers automatically enrich embedded images inside Word, PowerPoint, and OpenDocument files, rendered as blockquote captions in the output markdown.
+> - `UnsupportedFileTypeError` for anything without a parser, so failures are explicit.
+
 ## Install
 
 ```bash

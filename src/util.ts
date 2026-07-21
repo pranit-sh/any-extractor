@@ -1,4 +1,3 @@
-import concat from 'concat-stream';
 import yauzl from 'yauzl';
 import { DOMParser } from '@xmldom/xmldom';
 import type { ExtractedFile } from './types';
@@ -43,12 +42,13 @@ export function extractFiles(
         }
         zipfile.openReadStream(entry, (err, stream) => {
           if (err) return reject(err);
-          stream.pipe(
-            concat((data: Buffer) => {
-              out.push({ path: entry.fileName, content: data });
-              zipfile.readEntry();
-            }),
-          );
+          const chunks: Buffer[] = [];
+          stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+          stream.on('end', () => {
+            out.push({ path: entry.fileName, content: Buffer.concat(chunks) });
+            zipfile.readEntry();
+          });
+          stream.on('error', reject);
         });
       });
       zipfile.on('end', () => resolve(out));
