@@ -7,6 +7,7 @@ import type {
   ParserContext,
   ParserResult,
   Section,
+  TableMerge,
 } from '../types';
 import { extractFiles, parseXml } from '../util';
 import { guessImageMime, parseCoreProperties } from './ooxml-utils';
@@ -73,10 +74,18 @@ export class ExcelParser implements FileParser {
         const [headerRow, ...bodyRows] = grid.rows;
         const headers = headerRow.map((c) => String(c ?? ''));
         const rowsAsStrings = bodyRows.map((r) => r.map((c) => (c == null ? '' : String(c))));
+        // Shift merges up by one row because we peeled off the header row.
+        const merges = grid.merges.map<TableMerge>((m) => ({
+          row: m.row - 1,
+          col: m.col,
+          rowspan: m.rowspan,
+          colspan: m.colspan,
+        }));
         blocks.push(
           context.block.table(rowsAsStrings, {
             headers,
             raw: bodyRows,
+            ...(merges.length ? { merges } : {}),
             sectionPath: [name],
           }),
         );
@@ -89,7 +98,8 @@ export class ExcelParser implements FileParser {
       for (const drawingPath of drawingPaths) {
         const drawing = byPath.get(drawingPath);
         if (!drawing) continue;
-        const drawingText = extractDrawingText(drawing.content.toString());
+        const drawingXml = drawing.content.toString();
+        const drawingText = extractDrawingText(drawingXml);
         if (drawingText) {
           blocks.push(context.block.paragraph(drawingText, { sectionPath: [name] }));
         }
@@ -99,6 +109,7 @@ export class ExcelParser implements FileParser {
           'xl/drawings/_rels/$1.rels',
         );
         const rels = parseDrawingRels(byPath.get(drawingRelsPath)?.content.toString(), drawingPath);
+        const altByRid = extractPictureAltByRid(drawingXml);
 
         for (const chartPath of rels.charts) {
           const chart = byPath.get(chartPath);
@@ -109,14 +120,21 @@ export class ExcelParser implements FileParser {
           }
         }
 
-        for (const imgPath of rels.images) {
-          const img = byPath.get(imgPath);
-          if (!img) continue;
-          const mime = guessImageMime(imgPath);
-          const description = (await context.describe(img.content)) || undefined;
+        for (const img of rels.images) {
+          const imgFile = byPath.get(img.path);
+          if (!imgFile) continue;
+          const mime = guessImageMime(img.path);
+          const description = (await context.describe(imgFile.content)) || undefined;
+          const alt = altByRid.get(img.rId);
           blocks.push(
             context.block.image(
-              { mime, path: imgPath, bytes: img.content.length, description },
+              {
+                mime,
+                path: img.path,
+                bytes: imgFile.content.length,
+                ...(alt ? { alt } : {}),
+                description,
+              },
               { sectionPath: [name] },
             ),
           );
@@ -178,18 +196,21 @@ function resolveDrawingPaths(xml: string | undefined): string[] {
 function parseDrawingRels(
   xml: string | undefined,
   drawingPath: string,
-): { charts: string[]; images: string[] } {
-  const result = { charts: [] as string[], images: [] as string[] };
+): { charts: string[]; images: { rId: string; path: string }[] } {
+  const result = { charts: [] as string[], images: [] as { rId: string; path: string }[] };
   if (!xml) return result;
   const rels = parseXml(xml).getElementsByTagName('Relationship');
   const base = drawingPath.replace(/[^/]+$/, '');
   for (const r of Array.from(rels)) {
     const type = r.getAttribute('Type') ?? '';
     const target = r.getAttribute('Target');
+    const id = r.getAttribute('Id');
     if (!target) continue;
     const resolved = normalize(base + target);
     if (type.includes('/chart')) result.charts.push(resolved);
-    else if (type.includes('/image')) result.images.push(resolved);
+    else if (type.includes('/image') && id) {
+      result.images.push({ rId: id, path: resolved });
+    }
   }
   return result;
 }
@@ -205,10 +226,16 @@ function normalize(path: string): string {
 
 /**
  * Build a 2D grid from a worksheet, honoring cell references so gaps are
- * preserved as empty cells. Returns typed values where possible.
+ * preserved as empty cells. Returns typed values where possible, plus any
+ * merged-cell regions. Merged values are propagated across all covered
+ * cells so retrieval sees the intended content everywhere.
  */
-function extractSheetGrid(xml: string, sharedStrings: string[]): { rows: unknown[][] } {
-  const rowNodes = parseXml(xml).getElementsByTagName('row');
+function extractSheetGrid(
+  xml: string,
+  sharedStrings: string[],
+): { rows: unknown[][]; merges: TableMerge[] } {
+  const doc = parseXml(xml);
+  const rowNodes = doc.getElementsByTagName('row');
   const rows: unknown[][] = [];
   for (const rowNode of Array.from(rowNodes)) {
     const cells = Array.from(rowNode.getElementsByTagName('c'));
@@ -220,7 +247,68 @@ function extractSheetGrid(xml: string, sharedStrings: string[]): { rows: unknown
     }
     rows.push(row);
   }
-  return { rows };
+
+  const merges = parseMergeCells(doc);
+  // Pad rows so every merged region has real cells to write into.
+  const maxCol = merges.reduce(
+    (m, x) => Math.max(m, x.col + x.colspan - 1),
+    rows.reduce((m, r) => Math.max(m, r.length - 1), -1),
+  );
+  for (const row of rows) {
+    while (row.length <= maxCol) row.push('');
+  }
+
+  // Propagate the top-left value across every covered cell.
+  for (const m of merges) {
+    const topRow = rows[m.row];
+    if (!topRow) continue;
+    const value = topRow[m.col];
+    if (value === '' || value == null) continue;
+    for (let dr = 0; dr < m.rowspan; dr++) {
+      const r = rows[m.row + dr];
+      if (!r) continue;
+      for (let dc = 0; dc < m.colspan; dc++) {
+        if (dr === 0 && dc === 0) continue;
+        while (r.length <= m.col + dc) r.push('');
+        r[m.col + dc] = value;
+      }
+    }
+  }
+
+  return { rows, merges };
+}
+
+function parseMergeCells(doc: ReturnType<typeof parseXml>): TableMerge[] {
+  const nodes = doc.getElementsByTagName('mergeCell');
+  const out: TableMerge[] = [];
+  for (const node of Array.from(nodes)) {
+    const ref = node.getAttribute('ref');
+    if (!ref) continue;
+    const parsed = parseMergeRef(ref);
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+function parseMergeRef(ref: string): TableMerge | undefined {
+  const parts = ref.split(':');
+  if (parts.length !== 2) return undefined;
+  const start = parseCellRef(parts[0]);
+  const end = parseCellRef(parts[1]);
+  if (!start || !end) return undefined;
+  const row = Math.min(start.row, end.row);
+  const col = Math.min(start.col, end.col);
+  const rowspan = Math.abs(end.row - start.row) + 1;
+  const colspan = Math.abs(end.col - start.col) + 1;
+  return { row, col, rowspan, colspan };
+}
+
+function parseCellRef(ref: string): { row: number; col: number } | undefined {
+  const m = ref.match(/^([A-Z]+)(\d+)$/);
+  if (!m) return undefined;
+  let col = 0;
+  for (const ch of m[1]) col = col * 26 + (ch.charCodeAt(0) - 64);
+  return { row: parseInt(m[2], 10) - 1, col: col - 1 };
 }
 
 function columnIndex(ref: string | null): number {
@@ -262,6 +350,25 @@ function extractDrawingText(xml: string): string {
     )
     .filter(Boolean)
     .join('\n');
+}
+
+/**
+ * Walk each `<xdr:pic>` in a drawing and map its embed relationship id to
+ * the `descr` (or `title`) attribute on `<xdr:cNvPr>` \u2014 the alt text.
+ */
+function extractPictureAltByRid(xml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const pics = parseXml(xml).getElementsByTagName('xdr:pic');
+  for (const pic of Array.from(pics)) {
+    const cNvPr = pic.getElementsByTagName('xdr:cNvPr')[0];
+    const blip = pic.getElementsByTagName('a:blip')[0];
+    if (!cNvPr || !blip) continue;
+    const rid = blip.getAttribute('r:embed');
+    if (!rid) continue;
+    const alt = (cNvPr.getAttribute('descr') ?? cNvPr.getAttribute('title') ?? '').trim();
+    if (alt) out.set(rid, alt);
+  }
+  return out;
 }
 
 function extractChartText(xml: string): string {

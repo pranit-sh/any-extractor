@@ -7,7 +7,7 @@ import {
   SimpleParser,
   WordParser,
 } from './file-parser';
-import type { ExtractResult } from './types';
+import type { ExtractEvent, ExtractOptions, ExtractResult } from './types';
 
 export { AnyExtractor } from './extractors/any-extractor';
 export {
@@ -19,6 +19,8 @@ export {
   WordParser,
 } from './file-parser';
 export { createBlockFactory, buildTree, makeSection, renderMarkdown } from './blocks';
+export { chunk } from './chunking';
+export type { Chunk, ChunkOptions } from './chunking';
 export type {
   Block,
   BlockBase,
@@ -27,7 +29,9 @@ export type {
   BlockPosition,
   CodeBlock,
   DividerBlock,
+  ExtractEvent,
   ExtractMetadata,
+  ExtractOptions,
   ExtractResult,
   FileParser,
   HeadingBlock,
@@ -38,11 +42,13 @@ export type {
   ParagraphBlock,
   ParserContext,
   ParserResult,
+  ParserStreamEvent,
   QuoteBlock,
   Section,
   SectionKind,
   SectionNode,
   TableBlock,
+  TableMerge,
 } from './types';
 export { UnsupportedFileTypeError } from './types';
 
@@ -76,9 +82,32 @@ export function createExtractor(): AnyExtractor {
  * const { markdown, sections, metadata } = await extract('./deck.pptx');
  * console.log(markdown);
  * ```
+ *
+ * Pass an {@link ExtractOptions.signal} to cancel mid-extraction.
  */
-export function extract(input: string | Buffer): Promise<ExtractResult> {
-  return defaultExtractor().extract(input);
+export function extract(input: string | Buffer, options?: ExtractOptions): Promise<ExtractResult> {
+  return defaultExtractor().extract(input, options);
+}
+
+/**
+ * Stream extraction events as they become available. Sections arrive in
+ * reading order — perfect for agents that want to start reasoning on
+ * page 1 while page 500 is still parsing.
+ *
+ * ```ts
+ * for await (const evt of extractStream('./big.pdf', { signal })) {
+ *   if (evt.type === 'section') console.log(evt.section.markdown);
+ * }
+ * ```
+ *
+ * The stream ends with a `metadata` event. Non-fatal per-section errors
+ * are yielded as `error` events unless `options.onError === 'throw'`.
+ */
+export function extractStream(
+  input: string | Buffer,
+  options?: ExtractOptions,
+): AsyncIterable<ExtractEvent> {
+  return defaultExtractor().stream(input, options);
 }
 
 let cached: AnyExtractor | undefined;

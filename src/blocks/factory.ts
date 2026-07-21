@@ -93,6 +93,7 @@ export function createBlockFactory(): BlockFactory {
         ...(headers ? { headers } : {}),
         rows,
         ...(opts?.raw ? { raw: opts.raw } : {}),
+        ...(opts?.merges && opts.merges.length ? { merges: opts.merges } : {}),
       };
     },
 

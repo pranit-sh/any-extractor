@@ -1,6 +1,13 @@
 import { getDocumentProxy, getMeta } from 'unpdf';
 import { makeSection } from '../blocks';
-import type { Block, FileParser, ParserContext, ParserResult, Section } from '../types';
+import type {
+  Block,
+  FileParser,
+  ParserContext,
+  ParserResult,
+  ParserStreamEvent,
+  Section,
+} from '../types';
 import { splitKeywords } from './ooxml-utils';
 
 /**
@@ -15,22 +22,32 @@ export class PDFParser implements FileParser {
   readonly mimes = ['application/pdf'] as const;
 
   async parse(file: Buffer, ctx: ParserContext): Promise<ParserResult> {
+    const sections: Section[] = [];
+    let metadata: ParserResult['metadata'] = {};
+    for await (const evt of this.parseStream(file, ctx)) {
+      if (evt.type === 'section') sections.push(evt.section);
+      else if (evt.type === 'metadata') metadata = { ...metadata, ...evt.metadata };
+      // parseStream never emits `error` from PDF parsing today (unpdf
+      // errors abort the whole document); if it starts to, the batch API
+      // will simply drop failed pages, which matches historical behavior.
+    }
+    return { sections, metadata };
+  }
+
+  /**
+   * Stream one section per PDF page. Metadata is emitted first so callers
+   * that only need core props (title, page count) can consume it early.
+   * Per-page failures are yielded as recoverable `error` events so a
+   * corrupt page doesn't nuke the rest of the document.
+   */
+  async *parseStream(file: Buffer, ctx: ParserContext): AsyncIterable<ParserStreamEvent> {
     const pdf = await getDocumentProxy(new Uint8Array(file));
     const meta = await getMeta(pdf).catch(() => undefined);
     const totalPages = pdf.numPages;
 
-    const sections: Section[] = [];
-    for (let n = 1; n <= totalPages; n++) {
-      const page = await pdf.getPage(n);
-      const content = await page.getTextContent();
-      const paragraphs = layoutPage(content.items);
-      const blocks = paragraphs.map<Block>((text) => ctx.block.paragraph(text, { page: n }));
-      sections.push(makeSection('page', blocks, { index: n, label: `Page ${n}` }));
-    }
-
     const info = (meta?.info ?? {}) as Record<string, unknown>;
-    return {
-      sections,
+    yield {
+      type: 'metadata',
       metadata: {
         pageCount: totalPages,
         title: nonEmpty(info.Title),
@@ -41,6 +58,26 @@ export class PDFParser implements FileParser {
         modifiedAt: toDate(info.ModDate),
       },
     };
+
+    for (let n = 1; n <= totalPages; n++) {
+      try {
+        const page = await pdf.getPage(n);
+        const content = await page.getTextContent();
+        const paragraphs = layoutPage(content.items);
+        const blocks = paragraphs.map<Block>((text) => ctx.block.paragraph(text, { page: n }));
+        yield {
+          type: 'section',
+          section: makeSection('page', blocks, { index: n, label: `Page ${n}` }),
+        };
+      } catch (err) {
+        yield {
+          type: 'error',
+          page: n,
+          error: err instanceof Error ? err : new Error(String(err)),
+          recoverable: true,
+        };
+      }
+    }
   }
 }
 

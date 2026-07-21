@@ -114,10 +114,10 @@ type Block =
   | HeadingBlock // { level: 1–6, runs }
   | ParagraphBlock // { runs }
   | ListBlock // { ordered, items: ListItem[] }
-  | TableBlock // { headers?, rows, raw? }
+  | TableBlock // { headers?, rows, raw?, merges? }
   | CodeBlock // { language?, text }
   | QuoteBlock // { blocks }
-  | ImageBlock // { alt?, src?, mime?, data? }
+  | ImageBlock // { alt?, path?, mime, bytes, description? }
   | DividerBlock;
 ```
 
@@ -135,6 +135,12 @@ type BlockBase = {
 
 **Why this matters for agents:** you can chunk by section, cite by block id,
 or filter by `position.page` when the LLM asks "what does page 3 say?".
+
+**Alt text and merged cells.** DOCX / XLSX / PPTX alt text on images
+(`descr` / `title` on the DrawingML `cNvPr` element) is preserved on
+`ImageBlock.alt`. Excel `<mergeCells>` regions are preserved on
+`TableBlock.merges`, and the merged value is fanned out across every covered
+cell in `rows` / `raw` so retrieval sees it in each position.
 
 ### Traversing by heading — `Section.tree`
 
@@ -164,6 +170,74 @@ import { buildTree } from 'any-extractor';
 const tree = buildTree(someBlocks);
 ```
 
+## Chunking for RAG
+
+Generic text splitters (LangChain, LlamaIndex) work by regexing over a
+string — they don't know a table row from a paragraph, and they'll happily
+shred a code fence down the middle. `any-extractor` chunks the typed block
+stream directly, so it can guarantee things a string-based splitter can't:
+
+- **Atomic blocks are never split.** Tables, code blocks, and images stay
+  whole. A single oversized table becomes its own chunk rather than
+  getting sliced.
+- **Heading boundaries come from the parser**, not a regex. Whether the
+  source was DOCX, PDF, or PPTX, a heading is a heading.
+- **Real per-chunk provenance.** Each chunk carries the `page` and
+  `sectionPath` inherited from its first source block — usable for
+  citation UIs without any post-processing.
+- **Deterministic ids.** A chunk's id is derived from its constituent
+  block ids, so re-extracting the same file yields the same chunk ids —
+  safe to upsert into a vector store.
+
+```ts
+import { extract, chunk } from 'any-extractor';
+
+const result = await extract('./report.pdf');
+const chunks = chunk(result, { maxSize: 2000 });
+
+for (const c of chunks) {
+  console.log(c.id, c.page, c.sectionPath, c.size);
+  // c.text is markdown, ready to embed
+  // c.blocks is the exact source blocks for citations
+}
+```
+
+### `chunk(result, options?) → Chunk[]`
+
+```ts
+type Chunk = {
+  id: string; // sha1 of constituent block ids, 16 chars
+  text: string; // markdown (may be prefixed with section path)
+  blocks: Block[]; // exact source blocks, in order
+  index: number; // position in the sequence
+  page?: number; // first page any constituent block touches
+  sectionPath?: string[]; // e.g. ["Chapter 2", "1.3 Results"]
+  size: number; // measured with the configured sizer
+};
+
+type ChunkOptions = {
+  maxSize?: number; // default 2000 (chars ≈ 500 tokens)
+  minSize?: number; // default 200 — avoids tiny orphan chunks
+  sizer?: (text: string) => number; // default: (s) => s.length
+  includeSectionPath?: boolean; // default true — prepends `> path` to text
+};
+```
+
+Sizing is character-based by default. If you need model-exact token counts,
+pass your own `sizer`:
+
+```ts
+import { encoding_for_model } from 'tiktoken';
+const enc = encoding_for_model('gpt-4o');
+const chunks = chunk(result, {
+  maxSize: 800,
+  sizer: (s) => enc.encode(s).length,
+});
+```
+
+Chunks never cross a section boundary — a PDF page's chunks won't merge
+with the next page's, and a spreadsheet's sheets stay in separate chunks.
+
 ## API
 
 ### `extract(input) → Promise<ExtractResult>`
@@ -190,6 +264,12 @@ const extractor = createExtractor().addParser(myCustomParser);
 
 const result = await extractor.extract('./thing.foo');
 ```
+
+### `chunk(result, options?) → Chunk[]`
+
+Split an `ExtractResult` into retrieval-ready chunks. See
+[Chunking for RAG](#chunking-for-rag) above for the full type signature
+and behavior notes.
 
 ## Custom parsers
 

@@ -15,6 +15,18 @@ export interface FileParser {
    * @param context Extractor context (config, block factory, recursive parse helper).
    */
   parse(file: Buffer, context: ParserContext): Promise<ParserResult>;
+
+  /**
+   * Optional streaming variant. Yield {@link ParserStreamEvent}s in reading
+   * order — one `section` per page/slide/sheet, an optional `metadata`
+   * event (at any point), and `error` events for non-fatal per-section
+   * failures.
+   *
+   * If a parser implements this, the extractor uses it for
+   * {@link ExtractOptions}-driven streaming; otherwise the extractor falls
+   * back to calling {@link parse} and yielding its sections at the end.
+   */
+  parseStream?(file: Buffer, context: ParserContext): AsyncIterable<ParserStreamEvent>;
 }
 
 /** Structured output from a {@link FileParser}. */
@@ -24,6 +36,50 @@ export interface ParserResult {
   /** Format-specific metadata (page counts, sheet names, core props, …). */
   metadata?: Partial<ExtractMetadata>;
 }
+
+// ---------------------------------------------------------------------------
+// Streaming
+// ---------------------------------------------------------------------------
+
+/** Options accepted by both `extract()` and `extractStream()`. */
+export interface ExtractOptions {
+  /**
+   * Abort in-flight extraction. Checked at every section boundary; parsers
+   * that support fine-grained abort may also honor it internally.
+   */
+  signal?: AbortSignal;
+  /**
+   * How to handle a non-fatal per-section parser error.
+   *
+   * - `"skip"` — yield an `error` event and keep going. Default for
+   *   `extractStream()`.
+   * - `"throw"` — abort the whole extraction. Default for `extract()`.
+   */
+  onError?: 'skip' | 'throw';
+}
+
+/** An event yielded by {@link FileParser.parseStream} to the extractor. */
+export type ParserStreamEvent =
+  | { type: 'section'; section: Section }
+  | { type: 'error'; page?: number; error: Error; recoverable: true }
+  | { type: 'metadata'; metadata: Partial<ExtractMetadata> };
+
+/**
+ * An event yielded by the streaming extractor. Sections arrive in reading
+ * order as they finish parsing; a final `metadata` event closes the stream.
+ */
+export type ExtractEvent =
+  | { type: 'section'; section: Section }
+  | {
+      type: 'error';
+      /** 1-based page/slide/sheet number when the parser reports one. */
+      page?: number;
+      /** 0-based index of the section that failed within the document. */
+      sectionIndex: number;
+      error: Error;
+      recoverable: true;
+    }
+  | { type: 'metadata'; metadata: ExtractMetadata };
 
 /** Context object passed to every {@link FileParser.parse} call. */
 export interface ParserContext {
@@ -202,6 +258,26 @@ export interface TableBlock extends BlockBase {
   rows: string[][];
   /** Original typed values (numbers, dates, booleans) when known. */
   raw?: unknown[][];
+  /**
+   * Merged cell regions, as reported by the source document. Row/col are
+   * zero-based indices into the body `rows` (headers are peeled off — the
+   * header row is not addressable here). A merge with `row: -1` means the
+   * merge spans headers; parsers propagate merged values across covered
+   * cells so retrieval sees the intended content in every cell.
+   */
+  merges?: TableMerge[];
+}
+
+/** A rectangular block of merged cells in a {@link TableBlock}. */
+export interface TableMerge {
+  /** Zero-based row index (into body `rows`; use `-1` for the header row). */
+  row: number;
+  /** Zero-based column index. */
+  col: number;
+  /** Number of rows spanned (>= 1). */
+  rowspan: number;
+  /** Number of columns spanned (>= 1). */
+  colspan: number;
 }
 
 export interface CodeBlock extends BlockBase {
@@ -246,7 +322,7 @@ export interface BlockFactory {
   list(items: ListItem[], opts?: { ordered?: boolean } & BlockPosition): ListBlock;
   table(
     rows: string[][],
-    opts?: { headers?: string[]; raw?: unknown[][] } & BlockPosition,
+    opts?: { headers?: string[]; raw?: unknown[][]; merges?: TableMerge[] } & BlockPosition,
   ): TableBlock;
   code(code: string, opts?: { language?: string } & BlockPosition): CodeBlock;
   quote(text: string, pos?: BlockPosition): QuoteBlock;

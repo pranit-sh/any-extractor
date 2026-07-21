@@ -79,15 +79,24 @@ export class PowerPointParser implements FileParser {
       const rel = rels[n];
       if (rel) {
         const anchor = posix.dirname(posix.dirname(rel.path));
-        for (const target of extractImagePathsFromRels(rel.xml)) {
+        const relTargetsByRid = extractImageRelsByRid(rel.xml);
+        const altByRid = extractSlidePictureAltByRid(slides[n]);
+        for (const [rid, target] of relTargetsByRid) {
           const fullPath = posix.normalize(posix.join(anchor, target));
           const buffer = images[fullPath];
           if (!buffer) continue;
           const mime = guessImageMime(fullPath);
           const description = (await context.describe(buffer)) || undefined;
+          const alt = altByRid.get(rid);
           slideBlocks.push(
             context.block.image(
-              { mime, path: fullPath, bytes: buffer.length, description },
+              {
+                mime,
+                path: fullPath,
+                bytes: buffer.length,
+                ...(alt ? { alt } : {}),
+                description,
+              },
               posBase,
             ),
           );
@@ -162,10 +171,34 @@ function paragraphText(p: Element): string {
     .trim();
 }
 
-function extractImagePathsFromRels(xml?: string): string[] {
-  if (!xml) return [];
+function extractImageRelsByRid(xml?: string): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!xml) return out;
   const rels = parseXml(xml).getElementsByTagName('Relationship');
-  return Array.from(rels)
-    .filter((r) => r.getAttribute('Type')?.includes('/image') && r.getAttribute('Target'))
-    .map((r) => r.getAttribute('Target')!);
+  for (const r of Array.from(rels)) {
+    const type = r.getAttribute('Type') ?? '';
+    const target = r.getAttribute('Target');
+    const id = r.getAttribute('Id');
+    if (id && target && type.includes('/image')) out.set(id, target);
+  }
+  return out;
+}
+
+/**
+ * Walk each `<p:pic>` in a slide and map its embed relationship id to the
+ * `descr` (or `title`) attribute on `<p:cNvPr>` \u2014 the alt text.
+ */
+function extractSlidePictureAltByRid(xml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const pics = parseXml(xml).getElementsByTagName('p:pic');
+  for (const pic of Array.from(pics)) {
+    const cNvPr = pic.getElementsByTagName('p:cNvPr')[0];
+    const blip = pic.getElementsByTagName('a:blip')[0];
+    if (!cNvPr || !blip) continue;
+    const rid = blip.getAttribute('r:embed');
+    if (!rid) continue;
+    const alt = (cNvPr.getAttribute('descr') ?? cNvPr.getAttribute('title') ?? '').trim();
+    if (alt) out.set(rid, alt);
+  }
+  return out;
 }
