@@ -1,139 +1,266 @@
-# AnyExtractor
+# any-extractor
 
-[![NPM Version](https://img.shields.io/npm/v/any-extractor)](https://www.npmjs.com/package/any-extractor)
-[![License](https://img.shields.io/npm/l/any-extractor)](https://www.npmjs.com/package/any-extractor)
+> One `extract()` call. Any document. Agent-ready markdown + typed blocks + metadata.
+
+[![npm version](https://img.shields.io/npm/v/any-extractor.svg)](https://www.npmjs.com/package/any-extractor)
+[![license](https://img.shields.io/npm/l/any-extractor.svg)](./LICENSE)
 [![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
 
-A Node.js package to extract text from files.
+`any-extractor` turns whatever file you point it at into four things:
 
-## Features
+1. **`markdown`** — a single GFM string, rendered lazily from the blocks below and ready to hand to an LLM.
+2. **`text`** — plain reading-order text (no markdown syntax), also lazy. Useful for embeddings, search indices, TTS, or cheap token counts.
+3. **`sections`** — ordered pages / slides / sheets / body sections, each with typed blocks. The single source of truth.
+4. **`metadata`** — MIME type, title, author, page/slide counts, sheet names.
 
-- **Flexible input options:** Supports local file path, buffers, and file URLs.
-- **Auto type detection:** Automatically detects file type and extracts text using MIME type.
-- **Customizable parsers:** Allows creating new or modifying existing document parsers for any MIME types.
-- **Confluence support:** Extracts text from Confluence documents.
+Input can be a file path, URL, or `Buffer`. MIME type is detected automatically. Custom parsers can be registered via `AnyExtractor.addParser()` to override built-ins or add new MIME handlers (see [Custom parsers](#custom-parsers)).
 
-#### Supported Files
+> **What's new in 3.0**
+>
+> - Full rewrite around a five-block model (`heading`, `paragraph`, `list`, `table`, `image`) with stable content-derived ids.
+> - Blocks are the single source of truth; `result.markdown` and `result.text` render on demand (cached after first access) so the payload no longer carries duplicate copies of every paragraph. Use `toMarkdown(section)` / `toText(section)` for per-section rendering.
+> - New `AnyExtractor` class with `addParser()` — plug in your own MIME handlers (e.g. a vision LLM for images) without forking.
+> - Image parsers automatically enrich embedded images inside Word, PowerPoint, and OpenDocument files, rendered as blockquote captions in the output markdown.
+> - `UnsupportedFileTypeError` for anything without a parser, so failures are explicit.
 
-Here's a breakdown of the text extraction capabilities for each file type:
-
-| File Type                                        | Text Extraction |
-| ------------------------------------------------ | --------------- |
-| `.docx`                                          | ✅              |
-| `.pptx`                                          | ✅              |
-| `.xlsx`                                          | ✅              |
-| `.pdf`                                           | ✅              |
-| `.odt`                                           | ✅              |
-| `.odp`                                           | ✅              |
-| `.ods`                                           | ✅              |
-| `.csv`                                           | ✅              |
-| `.txt`                                           | ✅              |
-| `.json`                                          | ✅              |
-| Plain text (e.g., `.py`,<br> `.ts`, `.md`, etc.) | ✅              |
-| `confluence`                                     | ✅              |
-
-## Installation
+## Install
 
 ```bash
 npm install any-extractor
 ```
 
-## Getting Started
+Requires Node.js ≥ 18. Ships with ESM + CJS + `.d.ts`.
+
+## Quick start
 
 ```ts
-import { getAnyExtractor } from 'any-extractor';
+import { extract } from 'any-extractor';
 
-async function extractFromFile() {
-  const anyExt = getAnyExtractor();
-  const text = await anyExt.parseFile('./filename.docx');
-  console.log('Extracted Text:', text);
-}
+// Path, URL, or Buffer — the extractor sniffs the MIME type itself.
+const result = await extract('./quarterly-report.pdf');
 
-extractFromFile();
-```
+console.log(result.metadata.pageCount); // 42
+console.log(result.markdown.slice(0, 200)); // GFM
+console.log(result.text.slice(0, 200)); // plain text, no markdown syntax
 
-## Advanced Usage
-
-#### Authorization Parameter
-
-The second argument in `parseFile`, shown as `null`, is for Basic Authentication when accessing file URLs. Format: `Basic <base64-encoded-credentials>`
-
-Example:
-
-```ts
-const authString = 'Basic ' + Buffer.from('user:password').toString('base64');
-const text = await anyExt.parseFile('https://example.com/protected-file.docx', authString);
-console.log('Extracted Text:', text);
-```
-
-#### Custom Parsers:
-
-AnyExtractor is designed with extensibility in mind, allowing you to integrate your own custom document parsers for handling specific or less common file formats, or to implement tailored text extraction logic.<br>
-To create custom parser, you will need to implement `AnyParserMethod` class with the following signature:
-
-- `mimes: string[]`: class variable which has the list of mime types for your targeted files.
-- `apply: (buffer, mime, options, config)`: class method which returns the extracted text as string.
-  - buffer: file buffer
-  - mime: mime type of the file
-  - options?: second argument of extractText method
-  - config?: argument of getAnyExtractor method
-
-Create your extractor class implementing the `AnyParserMethod`.
-
-```ts
-import { AnyParserMethod } from 'any-extractor';
-
-export class CustomParser implements AnyParserMethod {
-  public mimes = ['application/hdb', 'application/sql'];
-
-  public apply = async (file: Buffer, extractorConfig: ExtractorConfig): Promise<string> => {
-    // your text extraction logic
-  };
+for (const section of result.sections) {
+  console.log(section.kind, section.label); // "page", "Page 3"
+  for (const block of section.blocks) {
+    if (block.type === 'heading') console.log('#'.repeat(block.level), block.text);
+  }
 }
 ```
 
-Add your custom parser to any extractor instance.
+## Supported formats
+
+| Format       | MIME                                                                        | Sections emitted           |
+| ------------ | --------------------------------------------------------------------------- | -------------------------- |
+| PDF          | `application/pdf`                                                           | one `page` per page        |
+| Word         | `application/vnd.openxmlformats-officedocument.wordprocessingml.document`   | single `body`              |
+| Excel        | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`         | one `sheet` per worksheet  |
+| PowerPoint   | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | one `slide` per slide      |
+| OpenDocument | `application/vnd.oasis.opendocument.{text,spreadsheet,presentation}`        | `body` / `sheet` / `slide` |
+| HTML         | `text/html`                                                                 | single `body`              |
+| Markdown     | `text/markdown`                                                             | single `body`              |
+| Plain text   | `text/plain`                                                                | single `body`              |
+| CSV          | `text/csv`                                                                  | single `body` (one table)  |
+| JSON         | `application/json`                                                          | single `body`              |
+
+## The result shape
 
 ```ts
-const anyExt = getAnyExtractor();
-anyExt.addParser(new CustomParser());
-const text = await anyExt.extractText('./filename.sql');
-console.log('Extracted Text:', text);
-```
-
-> Creating custom parsers for existing mimetypes will overwrite the implementation.
-
-#### Confluence Crawling
-
-Extract text from Confluence documents:
-
-```ts
-const { getAnyExtractor } = require('any-extractor');
-
-async function crawlConfluence() {
-  const textExt = getAnyExtractor({
-    confluence: {
-      baseUrl: '<baseurl>',
-      email: '<username>',
-      apiKey: '<api-key>',
-    },
-  });
-
-  const result = await textExt.parseConfluenceDoc('<pageId>');
+interface ExtractResult {
+  /** Full document as GFM. Rendered on first access, cached thereafter. */
+  readonly markdown: string;
+  /** Full document as plain text — no markdown syntax. Lazy and cached. */
+  readonly text: string;
+  sections: Section[];
+  metadata: ExtractMetadata;
 }
 
-crawlConfluence();
+interface Section {
+  kind: 'body' | 'page' | 'slide' | 'sheet';
+  label?: string; // e.g. "Page 3", "Slide 2", "Q1 Sales"
+  index?: number; // 1-based within its kind
+  blocks: Block[]; // structured content — the source of truth
+}
+
+interface ExtractMetadata {
+  mime: string;
+  source?: string; // file path, URL, or "buffer"
+  title?: string;
+  author?: string;
+  pageCount?: number; // PDF
+  slideCount?: number; // PPTX / ODP
+  sheetNames?: string[]; // XLSX / ODS
+}
 ```
 
-## License
+`Section` does not carry a rendered markdown/text string — that would duplicate every paragraph in memory and on the wire. Render on demand:
 
-[MIT](https://github.com/pranit-sh/any-extractor/blob/main/LICENSE)
+```ts
+import { extract, toMarkdown, toText } from 'any-extractor';
 
-## Report
+const result = await extract('./report.pdf');
 
-If you encounter bugs or have feature requests, [open an issue](https://github.com/pranit-sh/any-extractor/issues).
-Feel free to [start a discussion](https://github.com/pranit-sh/any-extractor/discussions) — whether it’s feedback, a question, or an idea!
+// Full document, in either form (lazy, cached):
+console.log(result.markdown);
+console.log(result.text);
+
+// Per section, only when you need it:
+for (const section of result.sections) {
+  console.log(toMarkdown(section));
+  console.log(toText(section));
+}
+```
+
+### Markdown vs. plain text
+
+| Output            | What you get                                                          | Good for                                                   |
+| ----------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
+| `result.markdown` | GFM: headings, lists, tables, blockquote captions, inline `**` / `*`. | LLM prompts, human review, anything that renders markdown. |
+| `result.text`     | Reading-order text. Bullets, pipes, and inline syntax stripped.       | Embeddings, keyword search, TTS, cheap token counts.       |
+
+Rules for the plain-text render (deterministic, no third-party dependencies):
+
+- Headings appear as bare lines.
+- Paragraphs and list items have inline markdown (`**bold**`, `*italic*`, `` `code` ``, `[label](url)`) stripped to their visible characters. Word-internal underscores (`snake_case`) are left alone.
+- Lists are one item per line, no bullet or number.
+- Tables become tab-separated rows (headers first, when present). Newlines inside cells are collapsed to spaces so each row stays on one line.
+- Images render as their `alt` (or parser-supplied `text`) if any; empty images produce no output.
+- Blocks are separated by a blank line; sections by two blank lines (no `---` divider).
+
+## The block model
+
+Five block types. That's the whole thing.
+
+```ts
+type Block = Heading | Paragraph | List | Table | Image;
+
+interface BlockBase {
+  id: string; // stable, content-derived hash
+  page?: number; // 1-based, when known
+  sectionPath?: string[]; // heading breadcrumb, e.g. ["Chapter 2", "Results"]
+}
+
+interface Heading extends BlockBase {
+  type: 'heading';
+  level: 1 | 2 | 3 | 4 | 5 | 6;
+  text: string;
+}
+interface Paragraph extends BlockBase {
+  type: 'paragraph';
+  text: string;
+} // inline GFM
+interface List extends BlockBase {
+  type: 'list';
+  ordered: boolean;
+  items: string[];
+}
+interface Table extends BlockBase {
+  type: 'table';
+  headers?: string[];
+  rows: string[][];
+}
+interface Image extends BlockBase {
+  type: 'image';
+  mime: string;
+  path?: string;
+  bytes: number;
+  alt?: string;
+  text?: string; // populated when a custom image parser is registered
+}
+```
+
+Notes:
+
+- **Paragraph `text` is inline markdown.** Bold, italic, code, and links are baked in as GFM syntax — you don't get separate "run" objects to walk.
+- **List items are strings.** Same rule: inline markdown baked in. Nested lists are flattened.
+- **Tables fan out merged cells.** If a `.xlsx` cell spans A1:B2 with the value `Total`, all four positions in `rows` will contain `Total`. Retrieval over rows never sees empty holes.
+- **Images are metadata-only by default.** No bytes, no base64 — just MIME, path in the container, size, and (when available) alt text. Register a custom image parser (see below) and every embedded image gets a `text` field with the parser's output.
+- **`sectionPath`** is the heading breadcrumb the block sits under, so an LLM can cite `Chapter 2 › Results` without you re-computing it.
+- **`id`** is a deterministic SHA-1 of the block's content + position, so re-running extraction produces the same ids.
+
+## Custom parsers
+
+Zero-config `extract()` covers every supported format out of the box. When you want to override a MIME (e.g. run images through a vision LLM, or use your own PDF parser), use the `AnyExtractor` class and call `addParser()`:
+
+```ts
+import { AnyExtractor } from 'any-extractor';
+
+const extractor = new AnyExtractor();
+
+extractor.addParser({
+  mimes: ['image/png', 'image/jpeg'],
+  async parse(buffer, ctx) {
+    const caption = await myVisionModel(buffer); // your call
+    return {
+      sections: [
+        {
+          kind: 'body',
+          blocks: [ctx.block.paragraph(caption)],
+        },
+      ],
+    };
+  },
+});
+
+const result = await extractor.extract('./slides.pptx');
+```
+
+Once a parser is registered:
+
+- Direct calls like `extractor.extract('./photo.png')` route to your parser.
+- **User parsers override built-ins** for the same MIME.
+- **Embedded images inside Word, PowerPoint, and OpenDocument files are enriched.** Every image block gets a `text` field with your parser's output, and its markdown rendering picks up a blockquote caption:
+
+  ```markdown
+  ![Sales chart](media/image1.png)
+
+  > Bar chart showing Q3 revenue up 18% vs. Q2, driven by APAC.
+  ```
+
+The `ctx` handed to your parser gives you the same building blocks the built-in parsers use:
+
+```ts
+interface ParserContext {
+  block: BlockFactory; // ctx.block.heading, .paragraph, .list, .table, .image
+  parseImage(bytes: Buffer, mime: string): Promise<string | undefined>;
+}
+```
+
+## Errors
+
+```ts
+import { extract, AnyExtractor, UnsupportedFileTypeError } from 'any-extractor';
+
+try {
+  await extract('./mystery.bin');
+} catch (err) {
+  if (err instanceof UnsupportedFileTypeError) {
+    console.log(err.mime); // the sniffed MIME that had no parser
+  }
+}
+```
+
+`UnsupportedFileTypeError` is thrown when no built-in or user-registered parser matches the sniffed MIME. Add a matching parser via `new AnyExtractor().addParser({ mimes: [...], parse })` to handle it.
+
+## Why this scope
+
+This package is aimed at feeding documents into agents, RAG pipelines, and LLM workflows. That means:
+
+- **One entry point for the 90% case.** `extract(input)` — no factories, no builders, no options that only three people ever need.
+- **One escape hatch for the last 10%.** `new AnyExtractor().addParser(...)` when you want to swap in a vision LLM, a stricter PDF backend, or your own MIME.
+- **Markdown first.** LLMs are already trained on it; every block can be re-rendered without a separate template.
+- **Provenance built in.** `page`, `sectionPath`, and `id` on every block, so citations and dedup are trivial.
+- **Deterministic output.** Same file in → same ids out, so you can cache/upsert without churn.
+
+If you need lower-level control (streaming, footnote extraction, styling metadata), this isn't the library — reach for `pdf.js`, `mammoth`, or `unoconv` directly.
 
 ## Support
 
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-BD5FFF?style=flat&logo=buy-me-a-coffee&logoColor=ffffff&labelColor=BD5FFF)](https://www.buymeacoffee.com/pranit.sh)
+If `any-extractor` saved you an afternoon, you can [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-BD5FFF?style=flat&logo=buy-me-a-coffee&logoColor=ffffff&labelColor=BD5FFF)](https://www.buymeacoffee.com/pranit.sh) — it keeps the parsers fed.
+
+## License
+
+[MIT](./LICENSE)

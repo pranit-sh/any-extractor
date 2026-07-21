@@ -1,177 +1,191 @@
-import { Element } from '@xmldom/xmldom';
-import { ERRORMSG } from '../constant';
-import { AnyParserMethod } from '../types';
-import { extractFiles, parseString } from '../util';
-import { AnyExtractor } from '../extractors/any-extractor';
+import type { Element } from '@xmldom/xmldom';
+import { makeSection } from '../blocks';
+import type {
+  Block,
+  ExtractMetadata,
+  FileParser,
+  ParserContext,
+  ParserResult,
+  Section,
+} from '../types';
+import { extractFiles, parseXml } from '../util';
+import { parseCoreProperties } from './ooxml-utils';
 
-export class ExcelParser implements AnyParserMethod {
-  mimes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+/**
+ * Parser for `.xlsx` workbooks. Emits one {@link Section} per worksheet
+ * (`kind: 'sheet'`) with a single {@link Table} block per sheet.
+ *
+ * Handles merged cells by "fanning out" the merged value across all
+ * covered cells so downstream consumers never see empty holes.
+ */
+export class ExcelParser implements FileParser {
+  readonly mimes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'] as const;
 
-  private anyExtractor: AnyExtractor;
-  constructor(anyExtractor: AnyExtractor) {
-    this.anyExtractor = anyExtractor;
-  }
+  async parse(file: Buffer, ctx: ParserContext): Promise<ParserResult> {
+    const files = await extractFiles(file, (path) =>
+      /^xl\/(workbook\.xml|sharedStrings\.xml|worksheets\/sheet\d+\.xml|_rels\/workbook\.xml\.rels)$|^docProps\/core\.xml$/.test(
+        path,
+      ),
+    );
 
-  async apply(file: Buffer): Promise<string> {
-    const patterns = {
-      sheets: /xl\/worksheets\/sheet\d+.xml/g,
-      drawings: /xl\/drawings\/drawing\d+.xml/g,
-      charts: /xl\/charts\/chart\d+.xml/g,
-      sharedStrings: 'xl/sharedStrings.xml',
-      images: /xl\/media\/image\d+\.(png|jpeg|jpg|webp)/g,
+    const workbookFile = files.find((f) => f.path === 'xl/workbook.xml');
+    const relsFile = files.find((f) => f.path === 'xl/_rels/workbook.xml.rels');
+    const stringsFile = files.find((f) => f.path === 'xl/sharedStrings.xml');
+    const coreFile = files.find((f) => f.path === 'docProps/core.xml');
+    if (!workbookFile || !relsFile) {
+      throw new Error('any-extractor: xlsx is missing workbook or relationships');
+    }
+
+    const strings = stringsFile ? parseSharedStrings(stringsFile.content.toString()) : [];
+    const sheetOrder = parseWorkbookSheets(
+      workbookFile.content.toString(),
+      relsFile.content.toString(),
+    );
+
+    const sections: Section[] = [];
+    const sheetNames: string[] = [];
+
+    for (let i = 0; i < sheetOrder.length; i++) {
+      const { name, target } = sheetOrder[i];
+      sheetNames.push(name);
+      const sheetFile = files.find((f) => f.path === `xl/${target}`);
+      if (!sheetFile) continue;
+
+      const grid = extractSheetGrid(sheetFile.content.toString(), strings);
+      if (grid.length === 0) continue;
+
+      const [headers, ...body] = grid;
+      const blocks: Block[] = [ctx.block.table(body, { headers, sectionPath: [name] })];
+      sections.push(makeSection('sheet', blocks, { index: i + 1, label: name }));
+    }
+
+    const metadata: Partial<ExtractMetadata> = {
+      ...(coreFile ? parseCoreProperties(coreFile.content.toString()) : {}),
+      sheetNames,
     };
 
-    try {
-      const files = await extractFiles(
-        file,
-        (path) =>
-          [patterns.sheets, patterns.drawings, patterns.charts, patterns.images].some((regex) =>
-            regex.test(path),
-          ) || path === patterns.sharedStrings,
-      );
-
-      if (files.length === 0 || !files.some((file) => patterns.sheets.test(file.path))) {
-        throw ERRORMSG.fileCorrupted('Missing or corrupted sheet files.');
-      }
-
-      const xmlContent = {
-        sheets: files
-          .filter((file) => patterns.sheets.test(file.path))
-          .map((file) => file.content.toString()),
-        drawings: files
-          .filter((file) => patterns.drawings.test(file.path))
-          .map((file) => file.content.toString()),
-        charts: files
-          .filter((file) => patterns.charts.test(file.path))
-          .map((file) => file.content.toString()),
-        sharedStrings: files
-          .find((file) => file.path === patterns.sharedStrings)
-          ?.content.toString(),
-        images: files.filter((file) => patterns.images.test(file.path)),
-      };
-
-      const sharedStrings = this.parseSharedStrings(xmlContent.sharedStrings);
-
-      const orderedText = files
-        .map(async (file) => {
-          if (patterns.sheets.test(file.path)) {
-            return this.extractSheetText([file.content.toString()], sharedStrings);
-          } else if (patterns.drawings.test(file.path)) {
-            return this.extractDrawingText([file.content.toString()]);
-          } else if (patterns.charts.test(file.path)) {
-            return this.extractChartText([file.content.toString()]);
-          } else if (patterns.images.test(file.path)) {
-            return await this.extractImageText([file]);
-          }
-          return null;
-        })
-        .filter(Boolean);
-
-      const resolvedText = await Promise.all(orderedText);
-      return resolvedText.filter(Boolean).join('\n');
-    } catch (error) {
-      console.error('AnyExtractor: Error parsing Excel file:', error);
-      throw error;
-    }
+    return { sections, metadata };
   }
+}
 
-  private parseSharedStrings(sharedStringsXml?: string): string[] {
-    if (!sharedStringsXml) return [];
-    const tNodes = parseString(sharedStringsXml).getElementsByTagName('t');
-    return Array.from(tNodes).map((node) => node.childNodes[0]?.nodeValue ?? '');
-  }
+// ---------------------------------------------------------------------------
+// Workbook / sheet plumbing
+// ---------------------------------------------------------------------------
 
-  private extractSheetText(sheetFiles: string[], sharedStrings: string[]): string {
-    return sheetFiles
-      .map((content) => {
-        const cNodes = parseString(content).getElementsByTagName('c');
-        return Array.from(cNodes)
-          .filter((node) => this.isValidInlineString(node) || this.hasValidValueNode(node))
-          .map((node) => this.getCellValue(node, sharedStrings))
-          .join('\n');
-      })
-      .join('\n');
-  }
-
-  private extractDrawingText(drawingFiles: string[]): string {
-    return drawingFiles
-      .map((content) => {
-        const pNodes = parseString(content).getElementsByTagName('a:p');
-        return Array.from(pNodes)
-          .map((node) => {
-            const tNodes = node.getElementsByTagName('a:t');
-            return Array.from(tNodes)
-              .map((tNode) => tNode.childNodes[0]?.nodeValue ?? '')
-              .join('');
-          })
-          .join('\n');
-      })
-      .join('\n');
-  }
-
-  private extractChartText(chartFiles: string[]): string {
-    return chartFiles
-      .map((content) => {
-        const vNodes = parseString(content).getElementsByTagName('c:v');
-        return Array.from(vNodes)
-          .map((node) => node.childNodes[0]?.nodeValue ?? '')
-          .join('\n');
-      })
-      .join('\n');
-  }
-
-  private async extractImageText(imageFiles: { path: string; content: Buffer }[]): Promise<string> {
-    const texts = await Promise.all(
-      imageFiles.map(async (file) => {
-        try {
-          return await this.anyExtractor.parseFile(file.content, null);
-        } catch (e) {
-          console.log(`AnyExtractor: Error extracting text from image ${file.path}:`, e);
-          return '';
-        }
-      }),
+function parseSharedStrings(xml: string): string[] {
+  const doc = parseXml(xml);
+  const out: string[] = [];
+  for (const si of Array.from(doc.getElementsByTagName('si'))) {
+    const parts = Array.from(si.getElementsByTagName('t')).map(
+      (t) => t.childNodes[0]?.nodeValue ?? '',
     );
-    return texts.filter(Boolean).join('\n');
+    out.push(parts.join(''));
   }
+  return out;
+}
 
-  private isValidInlineString(cNode: Element): boolean {
-    if (cNode.tagName.toLowerCase() !== 'c' || cNode.getAttribute('t') !== 'inlineStr')
-      return false;
-    const isNodes = cNode.getElementsByTagName('is');
-    const tNodes = isNodes[0]?.getElementsByTagName('t');
-    return tNodes?.[0]?.childNodes[0]?.nodeValue !== undefined;
+interface SheetRef {
+  name: string;
+  target: string;
+}
+
+function parseWorkbookSheets(workbookXml: string, relsXml: string): SheetRef[] {
+  const wb = parseXml(workbookXml);
+  const rels = parseXml(relsXml);
+  const relMap: Record<string, string> = {};
+  for (const rel of Array.from(rels.getElementsByTagName('Relationship'))) {
+    const id = rel.getAttribute('Id');
+    const target = rel.getAttribute('Target');
+    if (id && target) relMap[id] = target;
   }
-
-  private hasValidValueNode(cNode: Element): boolean {
-    const vNodes = cNode.getElementsByTagName('v');
-    return vNodes[0]?.childNodes[0]?.nodeValue !== undefined;
+  const out: SheetRef[] = [];
+  for (const sheet of Array.from(wb.getElementsByTagName('sheet'))) {
+    const name = sheet.getAttribute('name') ?? '';
+    const rId = sheet.getAttribute('r:id') ?? '';
+    const target = relMap[rId];
+    if (name && target) out.push({ name, target });
   }
+  return out;
+}
 
-  private getCellValue(cNode: Element, sharedStrings: string[]): string {
-    if (this.isValidInlineString(cNode)) {
-      return (
-        cNode.getElementsByTagName('is')[0].getElementsByTagName('t')[0].childNodes[0].nodeValue ??
-        ''
-      );
+// ---------------------------------------------------------------------------
+// Sheet → 2D grid (with merge fan-out)
+// ---------------------------------------------------------------------------
+
+function extractSheetGrid(xml: string, strings: string[]): string[][] {
+  const doc = parseXml(xml);
+  const rows = Array.from(doc.getElementsByTagName('row'));
+  const grid: string[][] = [];
+  let maxCol = 0;
+
+  for (const row of rows) {
+    const r = Number(row.getAttribute('r') ?? '0');
+    if (!r) continue;
+    while (grid.length < r) grid.push([]);
+    const cells = Array.from(row.getElementsByTagName('c'));
+    for (const cell of cells) {
+      const ref = cell.getAttribute('r') ?? '';
+      const { col } = parseRef(ref);
+      if (col < 0) continue;
+      const value = readCellValue(cell, strings);
+      const rowArr = grid[r - 1];
+      while (rowArr.length <= col) rowArr.push('');
+      rowArr[col] = value;
+      if (col + 1 > maxCol) maxCol = col + 1;
     }
+  }
 
-    if (this.hasValidValueNode(cNode)) {
-      const isSharedString = cNode.getAttribute('t') === 's';
-      const valueIndex = parseInt(
-        cNode.getElementsByTagName('v')[0].childNodes[0].nodeValue ?? '',
-        10,
-      );
-
-      if (isSharedString) {
-        if (valueIndex >= sharedStrings.length) {
-          throw ERRORMSG.fileCorrupted('AnyExtractor: Invalid shared string index.');
-        }
-        return sharedStrings[valueIndex];
+  // Fan-out merges.
+  const mergeEl = doc.getElementsByTagName('mergeCells')[0];
+  if (mergeEl) {
+    for (const merge of Array.from(mergeEl.getElementsByTagName('mergeCell'))) {
+      const range = merge.getAttribute('ref');
+      if (!range) continue;
+      const [start, end] = range.split(':');
+      const s = parseRef(start);
+      const e = parseRef(end);
+      if (s.row < 0 || e.row < 0) continue;
+      while (grid.length <= e.row) grid.push([]);
+      const value = grid[s.row]?.[s.col] ?? '';
+      for (let r = s.row; r <= e.row; r++) {
+        const rowArr = grid[r];
+        while (rowArr.length <= e.col) rowArr.push('');
+        for (let c = s.col; c <= e.col; c++) rowArr[c] = value;
       }
-
-      return valueIndex.toString();
+      if (e.col + 1 > maxCol) maxCol = e.col + 1;
     }
-
-    return '';
   }
+
+  // Normalize to a rectangular grid and drop trailing all-empty rows.
+  for (const r of grid) {
+    while (r.length < maxCol) r.push('');
+  }
+  while (grid.length && grid[grid.length - 1].every((c) => c === '')) grid.pop();
+  return grid;
+}
+
+function readCellValue(cell: Element, strings: string[]): string {
+  const type = cell.getAttribute('t') ?? '';
+  const vEl = cell.getElementsByTagName('v')[0];
+  const isEl = cell.getElementsByTagName('is')[0];
+  if (type === 's') {
+    const idx = Number(vEl?.childNodes[0]?.nodeValue ?? -1);
+    return strings[idx] ?? '';
+  }
+  if (type === 'inlineStr' && isEl) {
+    return Array.from(isEl.getElementsByTagName('t'))
+      .map((t) => t.childNodes[0]?.nodeValue ?? '')
+      .join('');
+  }
+  return vEl?.childNodes[0]?.nodeValue ?? '';
+}
+
+function parseRef(ref: string): { row: number; col: number } {
+  const m = /^([A-Z]+)(\d+)$/.exec(ref);
+  if (!m) return { row: -1, col: -1 };
+  const letters = m[1];
+  const row = Number(m[2]) - 1;
+  let col = 0;
+  for (const ch of letters) col = col * 26 + (ch.charCodeAt(0) - 64);
+  return { row, col: col - 1 };
 }

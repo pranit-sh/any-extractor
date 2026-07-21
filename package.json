@@ -1,22 +1,29 @@
 {
   "name": "any-extractor",
   "version": "2.0.5",
-  "description": "A universal text extractor for files.",
+  "description": "Turn any document (PDF, Word, Excel, PowerPoint, OpenDocument, HTML, JSON, CSV, text) into agent-ready markdown, typed blocks, and metadata — one call, with an optional custom-parser hook for vision LLMs and bespoke formats.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
     }
+  },
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
     "lint": "eslint .",
     "lint:check": "eslint . --no-error-on-unmatched-pattern",
     "format": "prettier --write 'src/**/*.{ts,js,json,md}'",
     "typecheck": "tsc --noEmit",
-    "build": "tsup src/index.ts --dts --format esm,cjs --out-dir dist",
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "prepare": "husky install"
   },
   "lint-staged": {
@@ -26,11 +33,26 @@
     ]
   },
   "keywords": [
-    "text extraction",
-    "ocr",
+    "ai",
+    "agent",
     "llm",
-    "image text extraction",
-    "file parser"
+    "rag",
+    "markdown",
+    "structured-extraction",
+    "document-parser",
+    "text-extraction",
+    "vision-llm",
+    "ocr",
+    "custom-parser",
+    "pdf",
+    "docx",
+    "xlsx",
+    "pptx",
+    "odt",
+    "html",
+    "csv",
+    "json",
+    "file-parser"
   ],
   "author": "Pranit Deshmukh",
   "license": "MIT",
@@ -60,11 +82,7 @@
     "@semantic-release/github": "^11.0.1",
     "@semantic-release/npm": "^12.0.1",
     "@semantic-release/release-notes-generator": "^14.0.3",
-    "@types/concat-stream": "^2.0.3",
-    "@types/js-yaml": "^4.0.9",
-    "@types/mime-types": "^2.1.4",
     "@types/node": "^22.14.0",
-    "@types/pdf-parse": "^1.1.5",
     "@types/yauzl": "^2.10.3",
     "@typescript-eslint/eslint-plugin": "^8.31.0",
     "@typescript-eslint/parser": "^8.31.0",
@@ -84,12 +102,8 @@
   },
   "dependencies": {
     "@xmldom/xmldom": "^0.9.8",
-    "cheerio": "^1.0.0",
-    "concat-stream": "^2.0.0",
     "file-type-mime": "^0.4.6",
-    "js-yaml": "^4.1.0",
-    "pdf-parse": "^1.1.1",
-    "undici": "^7.8.0",
+    "unpdf": "^1.6.2",
     "yauzl": "^3.2.0"
   }
 }
