@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { deflateRawSync } from 'node:zlib';
+import yauzl from 'yauzl';
 import { describe, expect, it, vi } from 'vitest';
 import { parse as detectMime } from 'file-type-mime';
 import {
@@ -11,6 +13,7 @@ import {
   toText,
   type FileParser,
 } from '../src/index';
+import { sniffZipMime } from '../src/util';
 
 // ---------------------------------------------------------------------------
 // Fixture registry
@@ -19,6 +22,137 @@ import {
 const FIXTURES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 const fixturePath = (name: string) => path.join(FIXTURES_DIR, name);
 const loadFixture = (name: string) => readFileSync(fixturePath(name));
+
+// ---------------------------------------------------------------------------
+// Streaming-ZIP helpers – used to synthesize an xlsx whose local file headers
+// hide the identifying `[Content_Types].xml` bytes (general-purpose bit 3).
+// ---------------------------------------------------------------------------
+
+interface ZipEntry {
+  name: string;
+  content: Buffer;
+}
+
+/** Read every entry from a ZIP buffer as (name, uncompressed bytes) pairs. */
+function readZipEntries(zip: Buffer): Promise<ZipEntry[]> {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(zip, { lazyEntries: true }, (err, zipfile) => {
+      if (err) return reject(err);
+      const out: ZipEntry[] = [];
+      zipfile.readEntry();
+      zipfile.on('entry', (entry: yauzl.Entry) => {
+        zipfile.openReadStream(entry, (streamErr, stream) => {
+          if (streamErr) return reject(streamErr);
+          const chunks: Buffer[] = [];
+          stream.on('data', (c: Buffer) => chunks.push(c));
+          stream.on('end', () => {
+            out.push({ name: entry.fileName, content: Buffer.concat(chunks) });
+            zipfile.readEntry();
+          });
+          stream.on('error', reject);
+        });
+      });
+      zipfile.on('end', () => resolve(out));
+      zipfile.on('error', reject);
+    });
+  });
+}
+
+/**
+ * Write entries to a ZIP that mimics a streaming writer: local file headers
+ * with general-purpose bit 3 set and zeroed size fields, followed by a data
+ * descriptor after each entry's compressed payload. This is the shape that
+ * defeats byte-signature MIME sniffers.
+ */
+function writeStreamingZip(entries: ZipEntry[]): Buffer {
+  const parts: Buffer[] = [];
+  const centralDirs: Buffer[] = [];
+  let offset = 0;
+  const CRC32_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      table[i] = c >>> 0;
+    }
+    return table;
+  })();
+  const crc32 = (buf: Buffer): number => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) c = CRC32_TABLE[(c ^ buf[i]) & 0xff]! ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+
+  for (const entry of entries) {
+    const nameBuf = Buffer.from(entry.name, 'utf8');
+    const compressed = deflateRawSync(entry.content);
+    const crc = crc32(entry.content);
+
+    // Local file header: sizes zeroed, general-purpose bit 3 set (0x0008).
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0); // signature
+    localHeader.writeUInt16LE(20, 4); // version needed
+    localHeader.writeUInt16LE(0x0008, 6); // flags — bit 3 = data descriptor
+    localHeader.writeUInt16LE(8, 8); // deflate
+    localHeader.writeUInt16LE(0, 10); // mod time
+    localHeader.writeUInt16LE(0, 12); // mod date
+    localHeader.writeUInt32LE(0, 14); // crc — deferred
+    localHeader.writeUInt32LE(0, 18); // compressed — deferred
+    localHeader.writeUInt32LE(0, 22); // uncompressed — deferred
+    localHeader.writeUInt16LE(nameBuf.length, 26);
+    localHeader.writeUInt16LE(0, 28); // extra len
+
+    // Data descriptor (post-payload, real sizes go here).
+    const descriptor = Buffer.alloc(16);
+    descriptor.writeUInt32LE(0x08074b50, 0); // descriptor signature
+    descriptor.writeUInt32LE(crc, 4);
+    descriptor.writeUInt32LE(compressed.length, 8);
+    descriptor.writeUInt32LE(entry.content.length, 12);
+
+    const localOffset = offset;
+    parts.push(localHeader, nameBuf, compressed, descriptor);
+    offset += localHeader.length + nameBuf.length + compressed.length + descriptor.length;
+
+    // Central directory entry — this one carries the real sizes/crc so
+    // yauzl can still read the archive back.
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4); // version made by
+    centralHeader.writeUInt16LE(20, 6); // version needed
+    centralHeader.writeUInt16LE(0x0008, 8); // flags
+    centralHeader.writeUInt16LE(8, 10); // deflate
+    centralHeader.writeUInt16LE(0, 12);
+    centralHeader.writeUInt16LE(0, 14);
+    centralHeader.writeUInt32LE(crc, 16);
+    centralHeader.writeUInt32LE(compressed.length, 20);
+    centralHeader.writeUInt32LE(entry.content.length, 24);
+    centralHeader.writeUInt16LE(nameBuf.length, 28);
+    centralHeader.writeUInt16LE(0, 30); // extra len
+    centralHeader.writeUInt16LE(0, 32); // comment len
+    centralHeader.writeUInt16LE(0, 34); // disk number
+    centralHeader.writeUInt16LE(0, 36); // internal attrs
+    centralHeader.writeUInt32LE(0, 38); // external attrs
+    centralHeader.writeUInt32LE(localOffset, 42);
+    centralDirs.push(centralHeader, nameBuf);
+  }
+
+  const centralStart = offset;
+  const centralBlock = Buffer.concat(centralDirs);
+  parts.push(centralBlock);
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(centralBlock.length, 12);
+  eocd.writeUInt32LE(centralStart, 16);
+  eocd.writeUInt16LE(0, 20);
+  parts.push(eocd);
+
+  return Buffer.concat(parts);
+}
 
 interface FixtureSpec {
   file: string;
@@ -330,6 +464,62 @@ describe('extract() – input shapes and errors', () => {
     const extractor = new AnyExtractor();
     // @ts-expect-error – intentionally wrong input type
     await expect(extractor.extract(42)).rejects.toBeInstanceOf(TypeError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ZIP-content MIME sniffing – rescues OOXML/ODF documents whose outer ZIP
+// header hides the identifying bytes (e.g. streaming-ZIP xlsx exports).
+// ---------------------------------------------------------------------------
+
+describe('sniffZipMime – ZIP-content fallback for OOXML / ODF', () => {
+  it('identifies xlsx from `xl/workbook.xml`', async () => {
+    const mime = await sniffZipMime(loadFixture('sample.xlsx'));
+    expect(mime).toBe('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  });
+
+  it('identifies docx from `word/document.xml`', async () => {
+    const mime = await sniffZipMime(loadFixture('sample.docx'));
+    expect(mime).toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  });
+
+  it('identifies pptx from `ppt/presentation.xml`', async () => {
+    const mime = await sniffZipMime(loadFixture('sample.pptx'));
+    expect(mime).toBe('application/vnd.openxmlformats-officedocument.presentationml.presentation');
+  });
+
+  it('returns undefined for a plain ZIP with no recognizable OOXML/ODF parts', async () => {
+    // Minimal empty ZIP: end-of-central-directory record only (22 bytes).
+    const emptyZip = Buffer.from([
+      0x50, 0x4b, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ]);
+    const mime = await sniffZipMime(emptyZip);
+    expect(mime).toBeUndefined();
+  });
+
+  it('recovers on a streaming-ZIP xlsx that file-type-mime cannot classify', async () => {
+    // Rewrite `sample.xlsx` entries into a streaming-ZIP archive (general-
+    // purpose bit 3 set, sizes deferred to data descriptors). That is the
+    // shape modern Excel exports produce and the shape that fools
+    // `file-type-mime` into reporting `application/zip`. If the extractor
+    // still routes the archive to the xlsx parser, the fallback works.
+    const entries = await readZipEntries(loadFixture('sample.xlsx'));
+    const streamingZip = writeStreamingZip(entries);
+
+    // Sanity: outer sniff really does fall back to `application/zip`.
+    const outer = detectMime(
+      streamingZip.buffer.slice(
+        streamingZip.byteOffset,
+        streamingZip.byteOffset + streamingZip.byteLength,
+      ) as ArrayBuffer,
+    );
+    expect(outer?.mime).toBe('application/zip');
+
+    const result = await new AnyExtractor().extract(streamingZip);
+    expect(result.metadata.mime).toBe(
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+    expect(result.sections.length).toBeGreaterThan(0);
   });
 });
 

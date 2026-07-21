@@ -11,12 +11,11 @@
  *   - `extract_document_structured` → full typed sections + blocks
  *   - `extract_section`             → one section by index (paging)
  *
- * Security posture:
- *   Local filesystem paths are refused by default. Callers must pass
- *   `url:` (https/http/file), a base64 `data`, or opt in to local paths
- *   by setting `ANY_EXTRACTOR_ALLOW_LOCAL=1` in the server process env.
- *   This keeps a remote MCP client from reading arbitrary files off the
- *   host it's connected to.
+ * The server runs over stdio and inherits the ambient authority of the
+ * process that spawned it. That means every input source — HTTP(S)
+ * URLs, local `path`s, and inline base64 `data` — is accepted with no
+ * extra gating. Operators who need to sandbox filesystem access should
+ * do it at the process level (containers, seccomp, launcher config).
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -32,22 +31,13 @@ import { isValidUrl } from '../util';
 const DEFAULT_MAX_CHARS = 50_000;
 const HARD_MAX_CHARS = 500_000;
 
-const allowLocal = (): boolean => process.env.ANY_EXTRACTOR_ALLOW_LOCAL === '1';
-
 const inputSchema = z
   .object({
     url: z
       .string()
-      .describe(
-        'HTTP(S) URL, or `file://` URL when local access is enabled. Preferred over `path`.',
-      )
+      .describe('HTTP(S) or `file://` URL to fetch. Preferred over `path` when remote.')
       .optional(),
-    path: z
-      .string()
-      .describe(
-        'Local filesystem path. Rejected unless the server was started with ANY_EXTRACTOR_ALLOW_LOCAL=1.',
-      )
-      .optional(),
+    path: z.string().describe('Local filesystem path.').optional(),
     data: z
       .string()
       .describe('Base64-encoded file bytes. Use for uploads or piped content.')
@@ -70,8 +60,8 @@ const getExtractor = (): AnyExtractor => {
 };
 
 /**
- * Resolve tool input to a Buffer (or a URL string the extractor can fetch).
- * Enforces the local-path guardrail.
+ * Resolve tool input to a Buffer or a URL/path string the extractor can
+ * open. Base64 wins if provided; then URL; then local path.
  */
 async function resolveInput(input: ExtractInput): Promise<string | Buffer> {
   if (input.data) {
@@ -83,21 +73,9 @@ async function resolveInput(input: ExtractInput): Promise<string | Buffer> {
   }
   if (input.url) {
     if (!isValidUrl(input.url)) throw new Error(`Not a valid URL: ${input.url}`);
-    if (input.url.startsWith('file:') && !allowLocal()) {
-      throw new Error(
-        'file:// URLs are disabled. Restart the MCP server with ANY_EXTRACTOR_ALLOW_LOCAL=1 to enable local access.',
-      );
-    }
     return input.url;
   }
-  if (input.path) {
-    if (!allowLocal()) {
-      throw new Error(
-        'Local file paths are disabled. Restart the MCP server with ANY_EXTRACTOR_ALLOW_LOCAL=1 to enable, or pass `url` / `data` instead.',
-      );
-    }
-    return input.path;
-  }
+  if (input.path) return input.path;
   throw new Error('Provide one of `url`, `path`, or `data`.');
 }
 

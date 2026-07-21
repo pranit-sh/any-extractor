@@ -262,21 +262,7 @@ try {
 }
 ```
 
-To let the server read local files on the host, set the environment variable:
-
-```json
-{
-  "mcpServers": {
-    "any-extractor": {
-      "command": "npx",
-      "args": ["-y", "any-extractor-mcp"],
-      "env": { "ANY_EXTRACTOR_ALLOW_LOCAL": "1" }
-    }
-  }
-}
-```
-
-Without that flag, only HTTP(S) URLs and inline base64 `data` are accepted — a guardrail so a remote agent can't casually read arbitrary paths off your machine.
+The server inherits the ambient authority of the client that spawns it — it can read any file the launching process can read. That's the same model as every other stdio MCP server (filesystem, git, etc.). Operators who need to sandbox it should do so at the process level.
 
 ### Tools
 
@@ -290,14 +276,14 @@ All three accept the same input shape:
 
 ```jsonc
 {
-  "url": "https://example.com/report.pdf", // or
-  "path": "/abs/path/to/file.docx", // (requires ANY_EXTRACTOR_ALLOW_LOCAL=1)
+  "url": "https://example.com/report.pdf", // remote fetch
+  "path": "/abs/path/to/file.docx", // local file
   "data": "<base64>", // inline bytes
   "maxChars": 50000, // optional output cap
 }
 ```
 
-Errors (unsupported MIME, missing file, disabled local access) are returned as MCP tool errors, not thrown.
+Errors (unsupported MIME, missing file, invalid URL) are returned as MCP tool errors, not thrown.
 
 ## Support
 

@@ -40,25 +40,13 @@ describe('mcp server', () => {
     expect(names).toEqual(['extract_document', 'extract_document_structured', 'extract_section']);
   });
 
-  it('extracts a local file when ANY_EXTRACTOR_ALLOW_LOCAL is set', async () => {
-    process.env.ANY_EXTRACTOR_ALLOW_LOCAL = '1';
-    try {
-      const res = await call(client, 'extract_document', { path: 'test/fixtures/sample.md' });
-      expect(res.isError).toBeFalsy();
-      const payload = JSON.parse(res.content[0]!.text);
-      expect(payload.metadata.mime).toMatch(/^text\//);
-      expect(payload.markdown.length).toBeGreaterThan(0);
-      expect(payload.sectionCount).toBeGreaterThan(0);
-    } finally {
-      delete process.env.ANY_EXTRACTOR_ALLOW_LOCAL;
-    }
-  });
-
-  it('rejects local paths by default', async () => {
-    delete process.env.ANY_EXTRACTOR_ALLOW_LOCAL;
+  it('extracts a local file by path', async () => {
     const res = await call(client, 'extract_document', { path: 'test/fixtures/sample.md' });
-    expect(res.isError).toBe(true);
-    expect(res.content[0]!.text).toMatch(/disabled/i);
+    expect(res.isError).toBeFalsy();
+    const payload = JSON.parse(res.content[0]!.text);
+    expect(payload.metadata.mime).toMatch(/^text\//);
+    expect(payload.markdown.length).toBeGreaterThan(0);
+    expect(payload.sectionCount).toBeGreaterThan(0);
   });
 
   it('accepts base64 data', async () => {
@@ -70,19 +58,14 @@ describe('mcp server', () => {
   });
 
   it('returns a single section via extract_section', async () => {
-    process.env.ANY_EXTRACTOR_ALLOW_LOCAL = '1';
-    try {
-      const res = await call(client, 'extract_section', {
-        path: 'test/fixtures/sample.md',
-        sectionIndex: 0,
-      });
-      expect(res.isError).toBeFalsy();
-      const payload = JSON.parse(res.content[0]!.text);
-      expect(payload.section.index).toBe(0);
-      expect(payload.markdown.length).toBeGreaterThan(0);
-    } finally {
-      delete process.env.ANY_EXTRACTOR_ALLOW_LOCAL;
-    }
+    const res = await call(client, 'extract_section', {
+      path: 'test/fixtures/sample.md',
+      sectionIndex: 0,
+    });
+    expect(res.isError).toBeFalsy();
+    const payload = JSON.parse(res.content[0]!.text);
+    expect(payload.section.index).toBe(0);
+    expect(payload.markdown.length).toBeGreaterThan(0);
   });
 
   it('requires at least one input source', async () => {

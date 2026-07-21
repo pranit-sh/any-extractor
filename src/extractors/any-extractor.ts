@@ -17,7 +17,7 @@ import {
 } from '../file-parser';
 import type { ExtractMetadata, ExtractResult, FileParser, ParserContext, Section } from '../types';
 import { UnsupportedFileTypeError } from '../types';
-import { isValidUrl, readFileUrl } from '../util';
+import { isValidUrl, readFileUrl, sniffZipMime } from '../util';
 /**
  * The core extractor. Holds a MIME-keyed parser registry (built-ins plus
  * whatever you register with {@link AnyExtractor.addParser}) and
@@ -91,7 +91,15 @@ export class AnyExtractor {
     const detected = detectMime(
       buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
     );
-    const mime = detected?.mime ?? 'text/plain';
+    let mime = detected?.mime ?? 'text/plain';
+
+    // Streaming-ZIP OOXML/ODF documents (e.g. modern Excel exports) fool
+    // the byte-signature sniffer into reporting `application/zip`. Peek
+    // at the archive's entries to recover the real document MIME.
+    if (mime === 'application/zip') {
+      const sniffed = await sniffZipMime(buffer);
+      if (sniffed) mime = sniffed;
+    }
 
     const parser = this.parsers.get(mime);
     if (!parser) throw new UnsupportedFileTypeError(mime);
