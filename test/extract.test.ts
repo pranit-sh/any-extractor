@@ -3,7 +3,13 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { parse as detectMime } from 'file-type-mime';
-import { AnyExtractor, UnsupportedFileTypeError, extract, type FileParser } from '../src/index';
+import {
+  AnyExtractor,
+  UnsupportedFileTypeError,
+  extract,
+  toMarkdown,
+  type FileParser,
+} from '../src/index';
 
 // ---------------------------------------------------------------------------
 // Fixture registry
@@ -228,7 +234,7 @@ describe.each(FIXTURES)('extract($file)', (spec) => {
 
     // Every section's markdown prefix must appear in the flat document markdown.
     for (const section of result.sections) {
-      const prefix = section.markdown.trim().slice(0, 20);
+      const prefix = toMarkdown(section).trim().slice(0, 20);
       if (prefix.length > 0) {
         expect(result.markdown).toContain(prefix);
       }
@@ -343,7 +349,6 @@ describe('AnyExtractor class – custom parser registry', () => {
           {
             kind: 'body' as const,
             blocks: [ctx.block.paragraph('caption from vision model')],
-            markdown: '',
           },
         ],
         metadata: { title: 'my-image' },
@@ -368,7 +373,6 @@ describe('AnyExtractor class – custom parser registry', () => {
           {
             kind: 'body',
             blocks: [ctx.block.paragraph('OVERRIDDEN')],
-            markdown: '',
           },
         ],
       }),
@@ -390,7 +394,6 @@ describe('AnyExtractor class – custom parser registry', () => {
           {
             kind: 'body',
             blocks: [ctx.block.paragraph('CUSTOM DOCX OUTPUT')],
-            markdown: '',
           },
         ],
       }),
@@ -411,14 +414,12 @@ describe('AnyExtractor class – custom parser registry', () => {
             index: 1,
             label: 'Page 1',
             blocks: [ctx.block.paragraph('one')],
-            markdown: '',
           },
           {
             kind: 'page',
             index: 2,
             label: 'Page 2',
             blocks: [ctx.block.paragraph('two')],
-            markdown: '',
           },
         ],
         metadata: { pageCount: 2 },
@@ -446,11 +447,10 @@ describe('AnyExtractor class – custom parser registry', () => {
       mimes: ['image/png'],
       parse: async (_buf, ctx) => ({
         sections: [
-          { kind: 'body', blocks: [], markdown: '' }, // should be dropped
+          { kind: 'body', blocks: [] }, // should be dropped
           {
             kind: 'body',
             blocks: [ctx.block.heading(2, 'Hello')],
-            markdown: '',
           },
         ],
       }),
@@ -459,7 +459,7 @@ describe('AnyExtractor class – custom parser registry', () => {
     const result = await extractor.extract(png);
 
     expect(result.sections).toHaveLength(1);
-    expect(result.sections[0].markdown).toMatch(/^##\s+Hello/m);
+    expect(toMarkdown(result.sections[0])).toMatch(/^##\s+Hello/m);
     expect(result.markdown.trim()).toMatch(/^##\s+Hello/m);
   });
 
@@ -473,7 +473,6 @@ describe('AnyExtractor class – custom parser registry', () => {
           {
             kind: 'body',
             blocks: [ctx.block.paragraph('vision-text')],
-            markdown: '',
           },
         ],
       }),
@@ -489,7 +488,6 @@ describe('AnyExtractor class – custom parser registry', () => {
             {
               kind: 'body',
               blocks: [ctx.block.paragraph(text ?? '<none>')],
-              markdown: '',
             },
           ],
         };
@@ -501,5 +499,35 @@ describe('AnyExtractor class – custom parser registry', () => {
 
     expect(observed[0]).toBe('vision-text');
     expect(result.markdown).toContain('vision-text');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Result shape: blocks are the source of truth, markdown is derived lazily
+// ---------------------------------------------------------------------------
+
+describe('result shape – lazy markdown, no per-section duplicate', () => {
+  it('does not store a `markdown` field on sections', async () => {
+    const result = await extract(Buffer.from('hello\n\nworld', 'utf-8'));
+    for (const section of result.sections) {
+      expect(section).not.toHaveProperty('markdown');
+    }
+  });
+
+  it('exposes `result.markdown` as a stable, cached getter', async () => {
+    const result = await extract(Buffer.from('hello\n\nworld', 'utf-8'));
+    const a = result.markdown;
+    const b = result.markdown;
+    expect(a).toBe(b); // same reference => cached
+    expect(a).toContain('hello');
+    expect(a).toContain('world');
+  });
+
+  it('renders per-section markdown on demand via `toMarkdown`', async () => {
+    const result = await extract(Buffer.from('# Title\n\nBody paragraph', 'utf-8'));
+    const rendered = toMarkdown(result.sections[0]);
+    expect(rendered).toMatch(/^# Title/m);
+    // Same helper works on a raw block array too.
+    expect(toMarkdown(result.sections[0].blocks)).toBe(rendered);
   });
 });

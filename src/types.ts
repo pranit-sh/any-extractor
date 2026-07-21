@@ -2,10 +2,14 @@
  * Public type surface for `any-extractor`. Small, opinionated, and stable.
  *
  * The extractor turns any supported document into:
- * - a single GFM markdown string (`markdown`),
+ * - a single GFM markdown string (`markdown`, rendered lazily on access),
  * - ordered {@link Section}s (pages / sheets / slides / body), and
  * - typed {@link Block}s inside each section, with page/sectionPath
  *   provenance so agents can cite and filter.
+ *
+ * `blocks` is the single source of truth; markdown is derived from it via
+ * {@link toMarkdown} (or the lazy `result.markdown` getter). This keeps the
+ * result compact — no duplicate copies of every paragraph in memory.
  */
 
 // ---------------------------------------------------------------------------
@@ -13,12 +17,16 @@
 // ---------------------------------------------------------------------------
 
 /**
- * The result of an extraction. Ordered sections rendered as markdown, plus
- * file-level metadata.
+ * The result of an extraction. Ordered sections of structured blocks plus
+ * file-level metadata, with a lazily-rendered full-document markdown view.
  */
 export interface ExtractResult {
-  /** Full document rendered as GFM markdown. */
-  markdown: string;
+  /**
+   * Full document rendered as GFM markdown. Computed on first access from
+   * `sections` and cached — accessing it is free after the first read, and
+   * costs nothing if you never touch it.
+   */
+  readonly markdown: string;
   /** Ordered, format-agnostic sections with structured blocks. */
   sections: Section[];
   /** File-level metadata. Unknown fields are omitted. */
@@ -27,8 +35,8 @@ export interface ExtractResult {
 
 /**
  * A logical container inside a document (page, slide, sheet, body).
- * Every section carries an ordered list of structured blocks plus a
- * pre-rendered markdown view.
+ * Holds an ordered list of structured blocks in reading order. To render
+ * a section as GFM markdown, call {@link toMarkdown}.
  */
 export interface Section {
   /** What kind of section this is. */
@@ -39,8 +47,6 @@ export interface Section {
   index?: number;
   /** Structured content, in reading order. */
   blocks: Block[];
-  /** GFM markdown rendering of `blocks`. */
-  markdown: string;
 }
 
 /** The categories of content a section can represent. */

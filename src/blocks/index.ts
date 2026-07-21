@@ -1,3 +1,3 @@
 export { createBlockFactory } from './factory';
-export { renderMarkdown, SECTION_SEPARATOR } from './markdown';
+export { renderMarkdown, SECTION_SEPARATOR, toMarkdown } from './markdown';
 export { makeSection } from './section';

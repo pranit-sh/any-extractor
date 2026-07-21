@@ -2,6 +2,7 @@ import { AnyExtractor } from './extractors/any-extractor';
 import type { ExtractResult } from './types';
 
 export { AnyExtractor } from './extractors/any-extractor';
+export { renderMarkdown, toMarkdown } from './blocks';
 
 export type {
   Block,
@@ -30,8 +31,12 @@ let cached: AnyExtractor | undefined;
 /**
  * Extract structured content from a file path, URL, or Buffer.
  *
- * Returns a flat markdown string, section-scoped markdown + blocks, and
- * lightweight metadata. Auto-detects the file's MIME type.
+ * Returns typed sections of blocks, lightweight metadata, and a
+ * lazily-rendered `markdown` string. Auto-detects the file's MIME type.
+ *
+ * `sections` is the single source of truth; `result.markdown` is
+ * rendered on demand from those blocks (cached after first access), so
+ * the result stays compact in memory and when serialized.
  *
  * This is the zero-config entry point. Instantiate {@link AnyExtractor}
  * yourself if you want to register custom parsers via `addParser()`.
@@ -40,10 +45,13 @@ let cached: AnyExtractor | undefined;
  *
  * @example
  * ```ts
- * import { extract } from 'any-extractor';
+ * import { extract, toMarkdown } from 'any-extractor';
  *
  * const { markdown, sections, metadata } = await extract('./report.pdf');
  * console.log(metadata.pageCount, markdown.length);
+ *
+ * // Per-section markdown, on demand:
+ * for (const s of sections) console.log(toMarkdown(s));
  * ```
  */
 export function extract(input: string | Buffer): Promise<ExtractResult> {

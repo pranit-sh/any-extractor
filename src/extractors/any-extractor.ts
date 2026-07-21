@@ -12,7 +12,6 @@ import {
 import type { ExtractMetadata, ExtractResult, FileParser, ParserContext, Section } from '../types';
 import { UnsupportedFileTypeError } from '../types';
 import { isValidUrl, readFileUrl } from '../util';
-
 /**
  * The core extractor. Holds a MIME-keyed parser registry (built-ins plus
  * whatever you register with {@link AnyExtractor.addParser}) and
@@ -31,7 +30,7 @@ import { isValidUrl, readFileUrl } from '../util';
  *   mimes: ['image/png', 'image/jpeg'],
  *   async parse(buffer, ctx) {
  *     const caption = await myVisionLlm(buffer);
- *     return { sections: [{ kind: 'body', blocks: [ctx.block.paragraph(caption)], markdown: '' }] };
+ *     return { sections: [{ kind: 'body', blocks: [ctx.block.paragraph(caption)] }] };
  *   },
  * });
  * ```
@@ -97,21 +96,12 @@ export class AnyExtractor {
     };
     const { sections: rawSections, metadata: parserMeta } = await parser.parse(buffer, context);
 
-    const sections: Section[] = [];
-    for (const section of rawSections) {
-      if (section.blocks.length === 0) continue;
-      sections.push({ ...section, markdown: renderMarkdown(section.blocks) });
-    }
-
-    const markdown = sections
-      .map((s) => s.markdown)
-      .filter(Boolean)
-      .join(SECTION_SEPARATOR);
+    const sections: Section[] = rawSections.filter((s) => s.blocks.length > 0);
 
     const metadata: ExtractMetadata = { mime, ...(parserMeta ?? {}) };
     if (source) metadata.source = source;
 
-    return { markdown, sections, metadata };
+    return buildResult(sections, metadata);
   }
 
   /**
@@ -151,6 +141,31 @@ async function toBuffer(input: string | Buffer): Promise<{ buffer: Buffer; sourc
   }
   if (isValidUrl(input)) return { buffer: await readFileUrl(input), source: input };
   return { buffer: await fs.readFile(input), source: input };
+}
+
+/**
+ * Assemble an {@link ExtractResult} whose `markdown` property is rendered
+ * lazily on first access and cached thereafter. Callers who never touch
+ * `markdown` pay no rendering cost, and the block arrays remain the
+ * single source of truth — no duplicated section-level markdown strings.
+ */
+function buildResult(sections: Section[], metadata: ExtractMetadata): ExtractResult {
+  let cachedMarkdown: string | undefined;
+  const result = { sections, metadata } as ExtractResult;
+  Object.defineProperty(result, 'markdown', {
+    enumerable: true,
+    configurable: false,
+    get(): string {
+      if (cachedMarkdown === undefined) {
+        cachedMarkdown = sections
+          .map((s) => renderMarkdown(s.blocks))
+          .filter(Boolean)
+          .join(SECTION_SEPARATOR);
+      }
+      return cachedMarkdown;
+    },
+  });
+  return result;
 }
 
 /** Flatten a single block to plain-ish text for use as an image caption. */

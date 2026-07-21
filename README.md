@@ -8,15 +8,16 @@
 
 `any-extractor` turns whatever file you point it at into three things:
 
-1. **`markdown`** — a single GFM string, ready to hand to an LLM.
-2. **`sections`** — ordered pages / slides / sheets / body sections, each with typed blocks _and_ their own markdown.
+1. **`markdown`** — a single GFM string, rendered lazily from the blocks below and ready to hand to an LLM.
+2. **`sections`** — ordered pages / slides / sheets / body sections, each with typed blocks. The single source of truth.
 3. **`metadata`** — MIME type, title, author, page/slide counts, sheet names.
 
 Input can be a file path, URL, or `Buffer`. MIME type is detected automatically. Custom parsers can be registered via `AnyExtractor.addParser()` to override built-ins or add new MIME handlers (see [Custom parsers](#custom-parsers)).
 
 > **What's new in 3.0**
 >
-> - Full rewrite around a five-block model (`heading`, `paragraph`, `list`, `table`, `image`) with per-section markdown and stable content-derived ids.
+> - Full rewrite around a five-block model (`heading`, `paragraph`, `list`, `table`, `image`) with stable content-derived ids.
+> - Blocks are the single source of truth; `result.markdown` renders on demand (cached after first access) so the payload no longer carries duplicate copies of every paragraph. Use the `toMarkdown(section)` helper for per-section rendering.
 > - New `AnyExtractor` class with `addParser()` — plug in your own MIME handlers (e.g. a vision LLM for images) without forking.
 > - Image parsers automatically enrich embedded images inside Word, PowerPoint, and OpenDocument files, rendered as blockquote captions in the output markdown.
 > - `UnsupportedFileTypeError` for anything without a parser, so failures are explicit.
@@ -67,8 +68,9 @@ for (const section of result.sections) {
 
 ```ts
 interface ExtractResult {
-  markdown: string; // whole document as GFM
-  sections: Section[]; // ordered, with per-section markdown
+  /** Full document as GFM. Rendered on first access, cached thereafter. */
+  readonly markdown: string;
+  sections: Section[];
   metadata: ExtractMetadata;
 }
 
@@ -76,8 +78,7 @@ interface Section {
   kind: 'body' | 'page' | 'slide' | 'sheet';
   label?: string; // e.g. "Page 3", "Slide 2", "Q1 Sales"
   index?: number; // 1-based within its kind
-  blocks: Block[]; // structured content
-  markdown: string; // GFM rendering of `blocks`
+  blocks: Block[]; // structured content — the source of truth
 }
 
 interface ExtractMetadata {
@@ -88,6 +89,22 @@ interface ExtractMetadata {
   pageCount?: number; // PDF
   slideCount?: number; // PPTX / ODP
   sheetNames?: string[]; // XLSX / ODS
+}
+```
+
+`Section` does not carry a rendered markdown string — that would duplicate every paragraph in memory and on the wire. Render on demand with `toMarkdown`:
+
+```ts
+import { extract, toMarkdown } from 'any-extractor';
+
+const result = await extract('./report.pdf');
+
+// Full document (lazy, cached):
+console.log(result.markdown);
+
+// Per section, only when you need it:
+for (const section of result.sections) {
+  console.log(toMarkdown(section));
 }
 ```
 
@@ -160,7 +177,6 @@ extractor.addParser({
         {
           kind: 'body',
           blocks: [ctx.block.paragraph(caption)],
-          markdown: '',
         },
       ],
     };

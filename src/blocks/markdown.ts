@@ -1,4 +1,4 @@
-import type { Block, Image, List, Table } from '../types';
+import type { Block, Image, List, Section, Table } from '../types';
 
 /** Separator inserted between top-level sections in the final markdown. */
 export const SECTION_SEPARATOR = '\n\n---\n\n';
@@ -15,6 +15,16 @@ export function renderMarkdown(blocks: Block[]): string {
     if (rendered) chunks.push(rendered);
   }
   return chunks.join('\n\n');
+}
+
+/**
+ * Render a {@link Section} (or a raw block array) as GFM markdown. This
+ * is the on-demand alternative to storing a rendered copy on every
+ * section — call it only when you actually need the string.
+ */
+export function toMarkdown(input: Section | Block[]): string {
+  const blocks = Array.isArray(input) ? input : input.blocks;
+  return renderMarkdown(blocks);
 }
 
 function renderBlock(block: Block): string {
