@@ -132,7 +132,7 @@ Rules for the plain-text render (deterministic, no third-party dependencies):
 
 ## The block model
 
-Five block types. That's the whole thing.
+Five block types.
 
 ```ts
 type Block = Heading | Paragraph | List | Table | Image;
@@ -245,17 +245,45 @@ try {
 
 `UnsupportedFileTypeError` is thrown when no built-in or user-registered parser matches the sniffed MIME. Add a matching parser via `new AnyExtractor().addParser({ mimes: [...], parse })` to handle it.
 
-## Why this scope
+## MCP server
 
-This package is aimed at feeding documents into agents, RAG pipelines, and LLM workflows. That means:
+`any-extractor` also ships as a [Model Context Protocol](https://modelcontextprotocol.io) server, so agents in Claude Desktop, Cursor, VS Code, Continue, or any other MCP-capable client can extract documents directly — no glue code, no shell-outs.
 
-- **One entry point for the 90% case.** `extract(input)` — no factories, no builders, no options that only three people ever need.
-- **One escape hatch for the last 10%.** `new AnyExtractor().addParser(...)` when you want to swap in a vision LLM, a stricter PDF backend, or your own MIME.
-- **Markdown first.** LLMs are already trained on it; every block can be re-rendered without a separate template.
-- **Provenance built in.** `page`, `sectionPath`, and `id` on every block, so citations and dedup are trivial.
-- **Deterministic output.** Same file in → same ids out, so you can cache/upsert without churn.
+### Configure your client
 
-If you need lower-level control (streaming, footnote extraction, styling metadata), this isn't the library — reach for `pdf.js`, `mammoth`, or `unoconv` directly.
+```json
+{
+  "mcpServers": {
+    "any-extractor": {
+      "command": "npx",
+      "args": ["-y", "any-extractor-mcp"]
+    }
+  }
+}
+```
+
+The server inherits the ambient authority of the client that spawns it — it can read any file the launching process can read. That's the same model as every other stdio MCP server (filesystem, git, etc.). Operators who need to sandbox it should do so at the process level.
+
+### Tools
+
+| Tool                          | When to use                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| `extract_document`            | Default. Returns compact GFM markdown + metadata + section index.             |
+| `extract_document_structured` | Returns the full typed sections/blocks tree — for agents that walk structure. |
+| `extract_section`             | Returns one section by index. Cheap way to page through large PDFs.           |
+
+All three accept the same input shape:
+
+```jsonc
+{
+  "url": "https://example.com/report.pdf", // remote fetch
+  "path": "/abs/path/to/file.docx", // local file
+  "data": "<base64>", // inline bytes
+  "maxChars": 50000, // optional output cap
+}
+```
+
+Errors (unsupported MIME, missing file, invalid URL) are returned as MCP tool errors, not thrown.
 
 ## Support
 

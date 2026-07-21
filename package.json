@@ -5,11 +5,17 @@
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "bin": {
+    "any-extractor-mcp": "dist/mcp.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
+    },
+    "./mcp": {
+      "import": "./dist/mcp.mjs"
     }
   },
   "engines": {
@@ -24,7 +30,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "lint-staged": {
     "*.{js,jsx,ts,tsx,json,css,scss,md}": [
@@ -52,7 +59,9 @@
     "html",
     "csv",
     "json",
-    "file-parser"
+    "file-parser",
+    "mcp",
+    "model-context-protocol"
   ],
   "author": "Pranit Deshmukh",
   "license": "MIT",
@@ -76,12 +85,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.25.1",
-    "@semantic-release/changelog": "^6.0.3",
-    "@semantic-release/commit-analyzer": "^13.0.1",
-    "@semantic-release/git": "^10.0.1",
-    "@semantic-release/github": "^11.0.1",
-    "@semantic-release/npm": "^12.0.1",
-    "@semantic-release/release-notes-generator": "^14.0.3",
     "@types/node": "^22.14.0",
     "@types/yauzl": "^2.10.3",
     "@typescript-eslint/eslint-plugin": "^8.31.0",
@@ -94,16 +97,17 @@
     "husky": "^8.0.3",
     "lint-staged": "^15.5.1",
     "prettier": "^3.5.3",
-    "semantic-release": "^24.2.3",
     "ts-node": "^10.9.2",
     "tsup": "^8.4.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.2"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@xmldom/xmldom": "^0.9.8",
     "file-type-mime": "^0.4.6",
     "unpdf": "^1.6.2",
-    "yauzl": "^3.2.0"
+    "yauzl": "^3.2.0",
+    "zod": "^4.4.3"
   }
 }

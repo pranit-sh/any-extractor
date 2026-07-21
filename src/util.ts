@@ -68,3 +68,69 @@ export function extractFiles(
     }
   });
 }
+
+/**
+ * Peek inside a ZIP buffer and return a more specific MIME than
+ * `application/zip` when the archive is actually an OOXML (Word / Excel /
+ * PowerPoint) or ODF (Text / Spreadsheet / Presentation) document.
+ *
+ * We need this because `file-type-mime` sniffs only the outer ZIP local
+ * header. Documents written with streaming ZIP writers — including files
+ * exported by modern Excel / Word — set general-purpose bit 3, which
+ * blanks out the size fields in the local header and prevents the
+ * heuristic from finding `[Content_Types].xml`. The sniffer falls back
+ * to `application/zip` and the extractor throws `UnsupportedFileTypeError`.
+ *
+ * Detection order:
+ *   1. ODF: a top-level `mimetype` entry whose content starts with
+ *      `application/vnd.oasis.opendocument.*`.
+ *   2. OOXML: presence of a well-known part (`xl/workbook.xml`,
+ *      `word/document.xml`, `ppt/presentation.xml`).
+ *
+ * Returns `undefined` if the archive is a plain ZIP we can't classify.
+ */
+export async function sniffZipMime(zip: Buffer): Promise<string | undefined> {
+  const entryNames = new Set<string>();
+  let odfMime: string | undefined;
+
+  await new Promise<void>((resolve, reject) => {
+    yauzl.fromBuffer(zip, { lazyEntries: true }, (err, zipfile) => {
+      if (err) return reject(err);
+      zipfile.readEntry();
+      zipfile.on('entry', (entry: yauzl.Entry) => {
+        entryNames.add(entry.fileName);
+        if (entry.fileName === 'mimetype' && odfMime === undefined) {
+          zipfile.openReadStream(entry, (streamErr, stream) => {
+            if (streamErr) return reject(streamErr);
+            const chunks: Buffer[] = [];
+            stream.on('data', (c: Buffer) => chunks.push(c));
+            stream.on('end', () => {
+              const value = Buffer.concat(chunks).toString('utf8').trim();
+              if (value.startsWith('application/vnd.oasis.opendocument.')) {
+                odfMime = value;
+              }
+              zipfile.readEntry();
+            });
+            stream.on('error', reject);
+          });
+          return;
+        }
+        zipfile.readEntry();
+      });
+      zipfile.on('end', () => resolve());
+      zipfile.on('error', reject);
+    });
+  });
+
+  if (odfMime) return odfMime;
+  if (entryNames.has('xl/workbook.xml')) {
+    return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  }
+  if (entryNames.has('word/document.xml')) {
+    return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  }
+  if (entryNames.has('ppt/presentation.xml')) {
+    return 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+  }
+  return undefined;
+}
