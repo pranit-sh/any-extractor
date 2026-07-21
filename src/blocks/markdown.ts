@@ -60,7 +60,13 @@ function inferHeaders(rows: string[][]): string[] {
 function renderImage(block: Image): string {
   const alt = block.alt ?? 'image';
   const src = block.path ?? `image-${block.id}`;
-  return `![${alt}](${src})`;
+  const md = `![${alt}](${src})`;
+  if (!block.text) return md;
+  const caption = block.text
+    .split(/\r?\n/)
+    .map((line) => `> ${line}`)
+    .join('\n');
+  return `${md}\n\n${caption}`;
 }
 
 function escapeCell(text: string): string {

@@ -14,11 +14,27 @@ import { UnsupportedFileTypeError } from '../types';
 import { isValidUrl, readFileUrl } from '../util';
 
 /**
- * Core extractor. Holds the built-in parser registry keyed by MIME type
- * and dispatches incoming files to the matching parser.
+ * The core extractor. Holds a MIME-keyed parser registry (built-ins plus
+ * whatever you register with {@link AnyExtractor.addParser}) and
+ * dispatches each incoming file to the matching parser.
  *
- * You almost never need this directly — call {@link extract} instead.
- * @internal
+ * For zero-config usage, prefer the top-level {@link extract} function.
+ * Instantiate this class when you want to register custom parsers or hold
+ * an extractor with persistent state.
+ *
+ * @example Register a custom image parser for `image/png` (used for
+ * standalone PNG inputs *and* to enrich images embedded in Word / PPTX /
+ * ODT documents).
+ * ```ts
+ * const extractor = new AnyExtractor();
+ * extractor.addParser({
+ *   mimes: ['image/png', 'image/jpeg'],
+ *   async parse(buffer, ctx) {
+ *     const caption = await myVisionLlm(buffer);
+ *     return { sections: [{ kind: 'body', blocks: [ctx.block.paragraph(caption)], markdown: '' }] };
+ *   },
+ * });
+ * ```
  */
 export class AnyExtractor {
   private readonly parsers = new Map<string, FileParser>();
@@ -32,8 +48,27 @@ export class AnyExtractor {
       new ExcelParser(),
       new PowerPointParser(),
     ] as FileParser[]) {
-      for (const mime of parser.mimes) this.parsers.set(mime, parser);
+      this.register(parser);
     }
+  }
+
+  /**
+   * Register a custom {@link FileParser}. Every MIME in `parser.mimes` is
+   * routed to it, overriding any previously-registered parser (built-in
+   * or user) for those MIMEs.
+   *
+   * Container parsers (Word / PPTX / ODT) automatically use registered
+   * image parsers to enrich embedded {@link Image} blocks with `text`.
+   *
+   * @returns `this`, for chaining.
+   */
+  addParser(parser: FileParser): this {
+    this.register(parser);
+    return this;
+  }
+
+  private register(parser: FileParser): void {
+    for (const mime of parser.mimes) this.parsers.set(mime, parser);
   }
 
   /**
@@ -56,7 +91,10 @@ export class AnyExtractor {
     const parser = this.parsers.get(mime);
     if (!parser) throw new UnsupportedFileTypeError(mime);
 
-    const context: ParserContext = { block: createBlockFactory() };
+    const context: ParserContext = {
+      block: createBlockFactory(),
+      parseImage: (bytes, imgMime) => this.parseImage(bytes, imgMime),
+    };
     const { sections: rawSections, metadata: parserMeta } = await parser.parse(buffer, context);
 
     const sections: Section[] = [];
@@ -75,6 +113,35 @@ export class AnyExtractor {
 
     return { markdown, sections, metadata };
   }
+
+  /**
+   * Run a registered image parser and flatten its output into a single
+   * text string. Returns `undefined` if no parser is registered for
+   * `mime` or the parser produced no text. Errors from user parsers are
+   * swallowed so one bad image never breaks a document.
+   */
+  private async parseImage(bytes: Buffer, mime: string): Promise<string | undefined> {
+    const parser = this.parsers.get(mime);
+    if (!parser) return undefined;
+    try {
+      const subContext: ParserContext = {
+        block: createBlockFactory(),
+        // Nested image parsing is not supported \u2014 an image parser can't
+        // recursively call parseImage.
+        parseImage: async () => undefined,
+      };
+      const { sections } = await parser.parse(bytes, subContext);
+      const text = sections
+        .flatMap((s) => s.blocks)
+        .map(flattenBlockText)
+        .filter(Boolean)
+        .join('\n\n')
+        .trim();
+      return text || undefined;
+    } catch {
+      return undefined;
+    }
+  }
 }
 
 async function toBuffer(input: string | Buffer): Promise<{ buffer: Buffer; source?: string }> {
@@ -84,4 +151,20 @@ async function toBuffer(input: string | Buffer): Promise<{ buffer: Buffer; sourc
   }
   if (isValidUrl(input)) return { buffer: await readFileUrl(input), source: input };
   return { buffer: await fs.readFile(input), source: input };
+}
+
+/** Flatten a single block to plain-ish text for use as an image caption. */
+function flattenBlockText(block: Section['blocks'][number]): string {
+  switch (block.type) {
+    case 'heading':
+      return block.text;
+    case 'paragraph':
+      return block.text;
+    case 'list':
+      return block.items.join('\n');
+    case 'table':
+      return [block.headers ?? [], ...block.rows].map((r) => r.join('\t')).join('\n');
+    case 'image':
+      return block.text ?? block.alt ?? '';
+  }
 }

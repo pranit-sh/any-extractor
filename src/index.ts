@@ -1,16 +1,23 @@
 import { AnyExtractor } from './extractors/any-extractor';
 import type { ExtractResult } from './types';
 
+export { AnyExtractor } from './extractors/any-extractor';
+
 export type {
   Block,
   BlockBase,
+  BlockFactory,
   BlockKind,
+  BlockPos,
   ExtractMetadata,
   ExtractResult,
+  FileParser,
   Heading,
   Image,
   List,
   Paragraph,
+  ParserContext,
+  ParserResult,
   Section,
   SectionKind,
   Table,
@@ -25,6 +32,9 @@ let cached: AnyExtractor | undefined;
  *
  * Returns a flat markdown string, section-scoped markdown + blocks, and
  * lightweight metadata. Auto-detects the file's MIME type.
+ *
+ * This is the zero-config entry point. Instantiate {@link AnyExtractor}
+ * yourself if you want to register custom parsers via `addParser()`.
  *
  * @throws {UnsupportedFileTypeError} if the file's type isn't supported.
  *

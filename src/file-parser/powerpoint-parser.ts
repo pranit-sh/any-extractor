@@ -50,7 +50,7 @@ export class PowerPointParser implements FileParser {
         ? parseSlideRelationships(relsByPath[relsPath].content.toString())
         : { media: {} };
 
-      const blocks = extractSlideBlocks(slide.content.toString(), rels, media, ctx);
+      const blocks = await extractSlideBlocks(slide.content.toString(), rels, media, ctx);
       if (blocks.length === 0) continue;
       sections.push(makeSection('slide', blocks, { index: idx, label: `Slide ${idx}` }));
     }
@@ -88,12 +88,12 @@ function parseSlideRelationships(xml: string): SlideRelationships {
   return { media };
 }
 
-function extractSlideBlocks(
+async function extractSlideBlocks(
   xml: string,
   rels: SlideRelationships,
   media: Record<string, ExtractedFile>,
   ctx: ParserContext,
-): Block[] {
+): Promise<Block[]> {
   const doc = parseXml(xml);
   const spTree = doc.getElementsByTagName('p:spTree')[0] ?? doc.documentElement;
   if (!spTree) return [];
@@ -141,13 +141,16 @@ function extractSlideBlocks(
       const media0 = name ? media[name] : undefined;
       if (media0) {
         const pos: BlockPos = {};
+        const mime = guessImageMime(media0.path);
+        const text = await ctx.parseImage(media0.content, mime);
         blocks.push(
           ctx.block.image(
             {
-              mime: guessImageMime(media0.path),
+              mime,
               path: media0.path,
               bytes: media0.content.length,
               ...(alt ? { alt } : {}),
+              ...(text ? { text } : {}),
             },
             pos,
           ),

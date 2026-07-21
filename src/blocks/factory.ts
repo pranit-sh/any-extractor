@@ -67,6 +67,7 @@ export function createBlockFactory(): BlockFactory {
       };
       if (args.path) base.path = args.path;
       if (args.alt) base.alt = args.alt;
+      if (args.text) base.text = args.text;
       return withPos(base, pos);
     },
   };

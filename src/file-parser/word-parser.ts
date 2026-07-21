@@ -53,7 +53,7 @@ export class WordParser implements FileParser {
     }
     const rels = parseRelationships(relsFile.content.toString());
 
-    const blocks = extractBlocks(mainDoc.content.toString(), rels, media, context);
+    const blocks = await extractBlocks(mainDoc.content.toString(), rels, media, context);
 
     const sections: Section[] = [];
     if (blocks.length) sections.push(makeSection('body', blocks));
@@ -95,12 +95,12 @@ function parseRelationships(xml: string): Relationships {
 // Body → blocks
 // ---------------------------------------------------------------------------
 
-function extractBlocks(
+async function extractBlocks(
   xml: string,
   rels: Relationships,
   media: Record<string, ExtractedFile>,
   ctx: ParserContext,
-): Block[] {
+): Promise<Block[]> {
   const doc = parseXml(xml);
   const bodyEl = doc.getElementsByTagName('w:body')[0] ?? doc.documentElement;
   if (!bodyEl) return [];
@@ -151,6 +151,7 @@ function extractBlocks(
         const media0 = media[img.mediaName];
         if (!media0) continue;
         const mime = guessImageMime(media0.path);
+        const text = await ctx.parseImage(media0.content, mime);
         blocks.push(
           ctx.block.image(
             {
@@ -158,6 +159,7 @@ function extractBlocks(
               path: media0.path,
               bytes: media0.content.length,
               ...(img.alt ? { alt: img.alt } : {}),
+              ...(text ? { text } : {}),
             },
             currentPos(),
           ),

@@ -48,11 +48,11 @@ export class OpenOfficeParser implements FileParser {
     const kind = detectKind(body);
     const sections =
       kind === 'text'
-        ? extractText(body, pictures, ctx)
+        ? await extractText(body, pictures, ctx)
         : kind === 'spreadsheet'
           ? extractSpreadsheet(body, ctx)
           : kind === 'presentation'
-            ? extractPresentation(body, pictures, ctx)
+            ? await extractPresentation(body, pictures, ctx)
             : [];
 
     const metadata = metaFile ? parseMeta(metaFile.content.toString()) : {};
@@ -86,15 +86,16 @@ function parseMeta(xml: string): Partial<ExtractMetadata> {
 // ODT (text)
 // ---------------------------------------------------------------------------
 
-function extractText(
+async function extractText(
   body: Element,
   pictures: Record<string, ExtractedFile>,
   ctx: ParserContext,
-): Section[] {
+): Promise<Section[]> {
   const officeText = body.getElementsByTagName('office:text')[0];
   if (!officeText) return [];
   const blocks: Block[] = [];
   const headingStack: string[] = [];
+  const pending: Promise<void>[] = [];
 
   const currentPos = (): BlockPos =>
     headingStack.length ? { sectionPath: [...headingStack] } : {};
@@ -111,7 +112,7 @@ function extractText(
     } else if (el.tagName === 'text:p') {
       const text = textOf(el).trim();
       if (text) blocks.push(ctx.block.paragraph(text, currentPos()));
-      collectImages(el, pictures, ctx, blocks, currentPos());
+      pending.push(...collectImages(el, pictures, ctx, blocks, currentPos()));
     } else if (el.tagName === 'text:list') {
       const items = readList(el);
       if (items.length) blocks.push(ctx.block.list(items, currentPos()));
@@ -123,6 +124,7 @@ function extractText(
     }
   }
 
+  if (pending.length) await Promise.all(pending);
   return blocks.length ? [makeSection('body', blocks)] : [];
 }
 
@@ -153,7 +155,8 @@ function collectImages(
   ctx: ParserContext,
   out: Block[],
   pos: BlockPos,
-): void {
+): Promise<void>[] {
+  const pending: Promise<void>[] = [];
   for (const image of Array.from(el.getElementsByTagName('draw:image'))) {
     const href = image.getAttribute('xlink:href');
     if (!href) continue;
@@ -161,10 +164,12 @@ function collectImages(
     if (!media) continue;
     const frame = image.parentNode as Element | null;
     const alt = frame ? attrOfFirst(frame, 'svg:desc') : undefined;
+    const mime = guessImageMime(media.path);
+    const slot = out.length;
     out.push(
       ctx.block.image(
         {
-          mime: guessImageMime(media.path),
+          mime,
           path: media.path,
           bytes: media.content.length,
           ...(alt ? { alt } : {}),
@@ -172,7 +177,24 @@ function collectImages(
         pos,
       ),
     );
+    pending.push(
+      ctx.parseImage(media.content, mime).then((text) => {
+        if (text) {
+          out[slot] = ctx.block.image(
+            {
+              mime,
+              path: media.path,
+              bytes: media.content.length,
+              ...(alt ? { alt } : {}),
+              text,
+            },
+            pos,
+          );
+        }
+      }),
+    );
   }
+  return pending;
 }
 
 // ---------------------------------------------------------------------------
@@ -216,14 +238,15 @@ function readOdfSheet(tbl: Element): string[][] {
 // ODP (presentation)
 // ---------------------------------------------------------------------------
 
-function extractPresentation(
+async function extractPresentation(
   body: Element,
   pictures: Record<string, ExtractedFile>,
   ctx: ParserContext,
-): Section[] {
+): Promise<Section[]> {
   const pres = body.getElementsByTagName('office:presentation')[0];
   if (!pres) return [];
   const sections: Section[] = [];
+  const pending: Promise<void>[] = [];
   const pages = Array.from(pres.getElementsByTagName('draw:page'));
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
@@ -251,11 +274,12 @@ function extractPresentation(
           for (const t of texts) blocks.push(ctx.block.paragraph(t));
         }
       }
-      collectImages(frame, pictures, ctx, blocks, {});
+      pending.push(...collectImages(frame, pictures, ctx, blocks, {}));
     }
     if (blocks.length === 0) continue;
     sections.push(makeSection('slide', blocks, { index: i + 1, label: name }));
   }
+  if (pending.length) await Promise.all(pending);
   return sections;
 }
 

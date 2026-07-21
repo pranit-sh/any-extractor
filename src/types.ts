@@ -104,7 +104,12 @@ export interface Table extends BlockBase {
   rows: string[][];
 }
 
-/** An embedded image. Metadata only — bytes are not carried. */
+/**
+ * An embedded image. Metadata only — image bytes are not carried on the
+ * result. If a parser is registered for the image's MIME type (see
+ * {@link AnyExtractor.addParser}), the extracted text is surfaced on
+ * `text` so downstream agents can consume it inline.
+ */
 export interface Image extends BlockBase {
   type: 'image';
   mime: string;
@@ -113,6 +118,11 @@ export interface Image extends BlockBase {
   bytes: number;
   /** Alt text, from the document if available. */
   alt?: string;
+  /**
+   * Text extracted from the image itself (e.g. OCR / vision LLM output),
+   * populated when a user parser is registered for this image's MIME.
+   */
+  text?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,39 +156,57 @@ export class UnsupportedFileTypeError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// Internals — used across parsers but not exported from the package entry
+// Parser plugin surface — public so users can implement their own parsers
 // ---------------------------------------------------------------------------
 
-/** @internal Ergonomic constructors for blocks. Used by parsers. */
-export interface BlockFactory {
-  heading(level: Heading['level'], text: string, pos?: BlockPos): Heading;
-  paragraph(text: string, pos?: BlockPos): Paragraph;
-  list(items: string[], opts?: { ordered?: boolean } & BlockPos): List;
-  table(rows: string[][], opts?: { headers?: string[] } & BlockPos): Table;
-  image(args: { mime: string; path?: string; bytes: number; alt?: string }, pos?: BlockPos): Image;
-}
-
-/** @internal Positional metadata a parser attaches when creating a block. */
-export interface BlockPos {
-  page?: number;
-  sectionPath?: string[];
-}
-
-/** @internal A parser for one or more MIME types. */
+/**
+ * A parser for one or more MIME types. Implement this to plug your own
+ * extractor (e.g. a vision LLM for images) into {@link AnyExtractor} via
+ * `addParser()`. User parsers override built-ins for matching MIMEs.
+ */
 export interface FileParser {
+  /** MIME types this parser handles. */
   readonly mimes: readonly string[];
+  /** Parse a file buffer into sections + metadata. */
   parse(file: Buffer, context: ParserContext): Promise<ParserResult>;
 }
 
-/** @internal Structured output from a parser. */
+/** Structured output from a parser. */
 export interface ParserResult {
   sections: Section[];
   metadata?: Partial<ExtractMetadata>;
 }
 
-/** @internal Context passed to every parser. */
+/** Context passed to every parser. */
 export interface ParserContext {
+  /** Constructors for structured blocks. */
   block: BlockFactory;
+  /**
+   * Run a registered image parser over the given bytes and return the
+   * flattened text, or `undefined` if no parser is registered for `mime`
+   * or the parser produced no text. Never throws — errors from user
+   * parsers are swallowed. Used by container parsers (Word / PPTX / ODT)
+   * to enrich {@link Image} blocks.
+   */
+  parseImage(bytes: Buffer, mime: string): Promise<string | undefined>;
+}
+
+/** Ergonomic constructors for blocks. */
+export interface BlockFactory {
+  heading(level: Heading['level'], text: string, pos?: BlockPos): Heading;
+  paragraph(text: string, pos?: BlockPos): Paragraph;
+  list(items: string[], opts?: { ordered?: boolean } & BlockPos): List;
+  table(rows: string[][], opts?: { headers?: string[] } & BlockPos): Table;
+  image(
+    args: { mime: string; path?: string; bytes: number; alt?: string; text?: string },
+    pos?: BlockPos,
+  ): Image;
+}
+
+/** Positional metadata a parser attaches when creating a block. */
+export interface BlockPos {
+  page?: number;
+  sectionPath?: string[];
 }
 
 /** @internal An entry pulled out of a zip container. */
