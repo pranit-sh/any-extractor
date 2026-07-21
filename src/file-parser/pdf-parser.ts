@@ -2,13 +2,12 @@ import { getDocumentProxy, getMeta } from 'unpdf';
 import { makeSection } from '../blocks';
 import type {
   Block,
+  ExtractMetadata,
   FileParser,
   ParserContext,
   ParserResult,
-  ParserStreamEvent,
   Section,
 } from '../types';
-import { splitKeywords } from './ooxml-utils';
 
 /**
  * Parser for PDF files. Uses `unpdf` (serverless PDF.js).
@@ -22,62 +21,32 @@ export class PDFParser implements FileParser {
   readonly mimes = ['application/pdf'] as const;
 
   async parse(file: Buffer, ctx: ParserContext): Promise<ParserResult> {
-    const sections: Section[] = [];
-    let metadata: ParserResult['metadata'] = {};
-    for await (const evt of this.parseStream(file, ctx)) {
-      if (evt.type === 'section') sections.push(evt.section);
-      else if (evt.type === 'metadata') metadata = { ...metadata, ...evt.metadata };
-      // parseStream never emits `error` from PDF parsing today (unpdf
-      // errors abort the whole document); if it starts to, the batch API
-      // will simply drop failed pages, which matches historical behavior.
-    }
-    return { sections, metadata };
-  }
-
-  /**
-   * Stream one section per PDF page. Metadata is emitted first so callers
-   * that only need core props (title, page count) can consume it early.
-   * Per-page failures are yielded as recoverable `error` events so a
-   * corrupt page doesn't nuke the rest of the document.
-   */
-  async *parseStream(file: Buffer, ctx: ParserContext): AsyncIterable<ParserStreamEvent> {
     const pdf = await getDocumentProxy(new Uint8Array(file));
     const meta = await getMeta(pdf).catch(() => undefined);
     const totalPages = pdf.numPages;
 
     const info = (meta?.info ?? {}) as Record<string, unknown>;
-    yield {
-      type: 'metadata',
-      metadata: {
-        pageCount: totalPages,
-        title: nonEmpty(info.Title),
-        author: nonEmpty(info.Author),
-        subject: nonEmpty(info.Subject),
-        keywords: splitKeywords(typeof info.Keywords === 'string' ? info.Keywords : undefined),
-        createdAt: toDate(info.CreationDate),
-        modifiedAt: toDate(info.ModDate),
-      },
-    };
+    const metadata: Partial<ExtractMetadata> = { pageCount: totalPages };
+    if (nonEmpty(info.Title)) metadata.title = nonEmpty(info.Title);
+    if (nonEmpty(info.Author)) metadata.author = nonEmpty(info.Author);
 
+    const sections: Section[] = [];
     for (let n = 1; n <= totalPages; n++) {
+      let paragraphs: string[] = [];
       try {
         const page = await pdf.getPage(n);
         const content = await page.getTextContent();
-        const paragraphs = layoutPage(content.items);
-        const blocks = paragraphs.map<Block>((text) => ctx.block.paragraph(text, { page: n }));
-        yield {
-          type: 'section',
-          section: makeSection('page', blocks, { index: n, label: `Page ${n}` }),
-        };
-      } catch (err) {
-        yield {
-          type: 'error',
-          page: n,
-          error: err instanceof Error ? err : new Error(String(err)),
-          recoverable: true,
-        };
+        paragraphs = layoutPage(content.items);
+      } catch {
+        // Skip corrupt pages rather than aborting the whole document.
+        continue;
       }
+      const blocks = paragraphs.map<Block>((text) => ctx.block.paragraph(text, { page: n }));
+      if (blocks.length === 0) continue;
+      sections.push(makeSection('page', blocks, { index: n, label: `Page ${n}` }));
     }
+
+    return { sections, metadata };
   }
 }
 
@@ -91,7 +60,6 @@ interface Item {
   y: number;
   w: number;
   h: number;
-  hasEOL: boolean;
 }
 
 /**
@@ -99,11 +67,12 @@ interface Item {
  *
  * Algorithm:
  *   1. Normalize items — drop empties, extract (x, y, w, h).
- *   2. Detect columns by clustering item left-x values. Fall back to a
- *      single column when the distribution is unimodal.
+ *   2. Detect columns by the largest gap between sorted left-x values;
+ *      require it to be ≥ 15% of the page width, else fall back to one
+ *      column.
  *   3. Within each column, sort top-to-bottom then left-to-right and group
  *      items into lines by y-proximity.
- *   4. Emit paragraphs by splitting on large vertical gaps between lines.
+ *   4. Emit paragraphs by splitting lines on large vertical gaps.
  */
 function layoutPage(rawItems: unknown[]): string[] {
   const items: Item[] = [];
@@ -113,7 +82,6 @@ function layoutPage(rawItems: unknown[]): string[] {
       transform?: number[];
       width?: number;
       height?: number;
-      hasEOL?: boolean;
     };
     if (typeof it.str !== 'string' || !it.transform) continue;
     if (!it.str.length) continue;
@@ -123,30 +91,17 @@ function layoutPage(rawItems: unknown[]): string[] {
       y: it.transform[5] ?? 0,
       w: it.width ?? 0,
       h: it.height ?? Math.abs(it.transform[3] ?? 10),
-      hasEOL: Boolean(it.hasEOL),
     });
   }
   if (items.length === 0) return [];
 
-  const columns = splitIntoColumns(items);
   const paragraphs: string[] = [];
-  for (const column of columns) {
-    for (const paragraph of columnToParagraphs(column)) {
-      paragraphs.push(paragraph);
-    }
+  for (const column of splitIntoColumns(items)) {
+    for (const paragraph of columnToParagraphs(column)) paragraphs.push(paragraph);
   }
   return paragraphs;
 }
 
-/**
- * Split items into left-to-right columns. Uses a simple gap heuristic on
- * the sorted list of left-x values: if the largest gap between adjacent
- * left-x values is more than ~15% of the page width AND wider than the
- * typical column padding, split there.
- *
- * Handles the common 1- and 2-column layouts. 3+ columns fall through to a
- * single-column read, which is still safer than random order.
- */
 function splitIntoColumns(items: Item[]): Item[][] {
   if (items.length < 20) return [items];
 
@@ -155,7 +110,6 @@ function splitIntoColumns(items: Item[]): Item[][] {
   const pageWidth = maxX - minX;
   if (pageWidth <= 0) return [items];
 
-  // Look at the distribution of left-x values.
   const lefts = items.map((i) => i.x).sort((a, b) => a - b);
   let bestGap = 0;
   let bestSplit = 0;
@@ -166,32 +120,19 @@ function splitIntoColumns(items: Item[]): Item[][] {
       bestSplit = (lefts[i] + lefts[i - 1]) / 2;
     }
   }
-
-  // Require the gap to be at least 15% of page width — big enough to be a
-  // real column gutter, not just paragraph indentation.
   if (bestGap < pageWidth * 0.15) return [items];
 
   const left: Item[] = [];
   const right: Item[] = [];
-  for (const it of items) {
-    (it.x < bestSplit ? left : right).push(it);
-  }
-  // Sanity: both columns need a meaningful share of content.
+  for (const it of items) (it.x < bestSplit ? left : right).push(it);
   if (left.length < items.length * 0.15 || right.length < items.length * 0.15) return [items];
   return [left, right];
 }
 
-/**
- * Convert one column's items into a list of paragraph strings by grouping
- * items into lines and splitting on vertical gaps.
- */
 function columnToParagraphs(items: Item[]): string[] {
   if (items.length === 0) return [];
 
-  // Sort top-to-bottom (PDF y grows upward), then left-to-right.
   const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
-
-  // Median height gives us a stable unit for line/paragraph gap thresholds.
   const heights = sorted.map((i) => i.h).sort((a, b) => a - b);
   const medianH = heights[Math.floor(heights.length / 2)] || 10;
 
@@ -204,7 +145,6 @@ function columnToParagraphs(items: Item[]): string[] {
     const last = lines[lines.length - 1];
     if (last && Math.abs(last.y - it.y) <= medianH * 0.5) {
       last.items.push(it);
-      // Keep the line y as the running mean-ish anchor.
       last.y = (last.y + it.y) / 2;
     } else {
       lines.push({ y: it.y, items: [it] });
@@ -230,7 +170,6 @@ function columnToParagraphs(items: Item[]): string[] {
     if (trimmed) lineTexts.push({ text: trimmed, y: line.y });
   }
 
-  // Split lines into paragraphs on large vertical gaps.
   const paragraphs: string[] = [];
   let buf: string[] = [];
   let prevY: number | undefined;
@@ -246,7 +185,7 @@ function columnToParagraphs(items: Item[]): string[] {
   return paragraphs;
 }
 
-/** Join wrapped lines into a single paragraph, un-hyphenating soft breaks. */
+/** Join wrapped lines into one paragraph, un-hyphenating soft breaks. */
 function joinLines(lines: string[]): string {
   let out = '';
   for (let i = 0; i < lines.length; i++) {
@@ -255,29 +194,12 @@ function joinLines(lines: string[]): string {
       out = line;
       continue;
     }
-    // "hyphen-\nnated" → "hyphenated"
-    if (/[a-z]-$/.test(out)) {
-      out = out.replace(/-$/, '') + line;
-    } else {
-      out += ' ' + line;
-    }
+    if (/[a-z]-$/.test(out)) out = out.replace(/-$/, '') + line;
+    else out += ' ' + line;
   }
   return out.replace(/\s+/g, ' ').trim();
 }
 
 function nonEmpty(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
-}
-
-function toDate(v: unknown): Date | undefined {
-  if (v instanceof Date) return v;
-  if (typeof v !== 'string') return undefined;
-  const m = v.match(/^D?:?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?/);
-  if (!m) {
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? undefined : d;
-  }
-  const [, y, mo = '01', d = '01', h = '00', mi = '00', s = '00'] = m;
-  const date = new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +s));
-  return isNaN(date.getTime()) ? undefined : date;
 }

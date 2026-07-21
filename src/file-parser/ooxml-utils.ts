@@ -4,36 +4,23 @@ import { parseXml } from '../util';
 /**
  * Parse `docProps/core.xml` (shared by Word / Excel / PowerPoint).
  *
- * Returns best-effort core metadata — unknown / empty fields are omitted.
+ * Returns only the fields we surface (`title`, `author`). Everything else
+ * in core.xml is dropped by design — this package is agent-focused, not a
+ * full document introspector.
  */
 export function parseCoreProperties(xml: string): Partial<ExtractMetadata> {
   const doc = parseXml(xml);
-  const get = (tag: string) => {
+  const get = (tag: string): string | undefined => {
     const el = doc.getElementsByTagName(tag)[0];
     const v = el?.childNodes[0]?.nodeValue?.trim();
     return v || undefined;
   };
-  const created = get('dcterms:created');
-  const modified = get('dcterms:modified');
-  return {
-    title: get('dc:title'),
-    author: get('dc:creator'),
-    subject: get('dc:subject'),
-    language: get('dc:language'),
-    keywords: splitKeywords(get('cp:keywords')),
-    createdAt: created ? new Date(created) : undefined,
-    modifiedAt: modified ? new Date(modified) : undefined,
-  };
-}
-
-/** Split a comma/semicolon separated keyword string into a clean array. */
-export function splitKeywords(raw: string | undefined): string[] | undefined {
-  if (!raw) return undefined;
-  const out = raw
-    .split(/[,;]/)
-    .map((k) => k.trim())
-    .filter(Boolean);
-  return out.length ? out : undefined;
+  const out: Partial<ExtractMetadata> = {};
+  const title = get('dc:title');
+  if (title) out.title = title;
+  const author = get('dc:creator');
+  if (author) out.author = author;
+  return out;
 }
 
 const IMAGE_MIME_BY_EXT: Record<string, string> = {

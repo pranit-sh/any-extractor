@@ -2,13 +2,15 @@ import { makeSection } from '../blocks';
 import type { Block, FileParser, ParserContext, ParserResult, Section } from '../types';
 
 /**
- * Parser for text-based formats: plain text, markdown, HTML, and JSON.
+ * Parser for text-based formats: plain text, markdown, HTML, CSV, and
+ * JSON. Emits a single `body` section.
  *
- * - `text/plain` → paragraph blocks split on blank lines.
- * - `text/markdown` → single passthrough paragraph (the input is already markdown).
- * - `text/html` → very lightweight HTML → block conversion (headings, paragraphs,
- *   lists, code, blockquotes). No CSS, no sanitization.
- * - `application/json` → a single fenced `json` code block, pretty-printed if valid.
+ * - `text/plain` — paragraphs split on blank lines.
+ * - `text/markdown` — headings / lists / paragraphs (lightweight parser).
+ * - `text/html` — headings / paragraphs / lists (tags only, no CSS).
+ * - `text/csv` — a single table.
+ * - `application/json` — pretty-printed inside a fenced code block, rendered
+ *   as a paragraph so the shape stays flat.
  */
 export class SimpleParser implements FileParser {
   readonly mimes = [
@@ -23,15 +25,15 @@ export class SimpleParser implements FileParser {
     const raw = file.toString('utf-8');
     if (!raw.trim()) return { sections: [] };
 
-    const mime = detectFromContent(raw);
+    const kind = detectFromContent(raw);
     const blocks =
-      mime === 'json'
+      kind === 'json'
         ? parseJson(raw, ctx)
-        : mime === 'html'
+        : kind === 'html'
           ? parseHtml(raw, ctx)
-          : mime === 'markdown'
+          : kind === 'markdown'
             ? parseMarkdown(raw, ctx)
-            : mime === 'csv'
+            : kind === 'csv'
               ? parseCsv(raw, ctx)
               : parsePlainText(raw, ctx);
 
@@ -41,8 +43,7 @@ export class SimpleParser implements FileParser {
 }
 
 // ---------------------------------------------------------------------------
-// Content sniffing — we might get any of these under text/plain if `file-type`
-// didn't discriminate, so peek at the string.
+// Content sniffing — `file-type` groups these under text/plain so we peek.
 // ---------------------------------------------------------------------------
 
 function detectFromContent(raw: string): 'text' | 'markdown' | 'html' | 'csv' | 'json' {
@@ -63,7 +64,7 @@ function looksLikeJson(s: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Parsers
+// Individual format parsers
 // ---------------------------------------------------------------------------
 
 function parsePlainText(raw: string, ctx: ParserContext): Block[] {
@@ -75,12 +76,13 @@ function parsePlainText(raw: string, ctx: ParserContext): Block[] {
 }
 
 function parseJson(raw: string, ctx: ParserContext): Block[] {
+  let pretty = raw;
   try {
-    const pretty = JSON.stringify(JSON.parse(raw), null, 2);
-    return [ctx.block.code(pretty, { language: 'json' })];
+    pretty = JSON.stringify(JSON.parse(raw), null, 2);
   } catch {
-    return [ctx.block.code(raw, { language: 'json' })];
+    /* keep original */
   }
+  return [ctx.block.paragraph(`\`\`\`json\n${pretty}\n\`\`\``)];
 }
 
 function parseCsv(raw: string, ctx: ParserContext): Block[] {
@@ -118,21 +120,20 @@ function parseCsvRow(line: string): string[] {
 }
 
 /**
- * Markdown → blocks. We keep this deliberately small: split on blank lines,
- * detect headings, code fences, lists. Anything else is a paragraph.
+ * Markdown → blocks. Deliberately small: split on blank lines, detect
+ * headings, lists, code fences (as paragraphs). Everything else is a
+ * paragraph.
  */
 function parseMarkdown(raw: string, ctx: ParserContext): Block[] {
   const blocks: Block[] = [];
-  const chunks = splitMarkdown(raw);
-  for (const chunk of chunks) {
+  for (const chunk of splitMarkdown(raw)) {
     const h = /^(#{1,6})\s+(.+)$/.exec(chunk);
     if (h) {
       blocks.push(ctx.block.heading(h[1].length as 1, h[2].trim()));
       continue;
     }
-    const fence = /^```(\w*)\n([\s\S]*?)\n```$/.exec(chunk);
-    if (fence) {
-      blocks.push(ctx.block.code(fence[2], fence[1] ? { language: fence[1] } : undefined));
+    if (/^```/.test(chunk)) {
+      blocks.push(ctx.block.paragraph(chunk));
       continue;
     }
     if (/^(-|\*|\d+\.)\s/.test(chunk)) {
@@ -140,8 +141,7 @@ function parseMarkdown(raw: string, ctx: ParserContext): Block[] {
       const items = chunk
         .split(/\n(?=(?:-|\*|\d+\.)\s)/)
         .map((line) => line.replace(/^(?:-|\*|\d+\.)\s+/, '').trim())
-        .filter(Boolean)
-        .map((text) => ({ runs: [{ text }] }));
+        .filter(Boolean);
       blocks.push(ctx.block.list(items, { ordered }));
       continue;
     }
@@ -181,39 +181,30 @@ function splitMarkdown(raw: string): string[] {
 
 function parseHtml(raw: string, ctx: ParserContext): Block[] {
   const blocks: Block[] = [];
-  // Strip script/style entirely
   const cleaned = raw
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '');
 
-  const blockRegex = /<(h[1-6]|p|ul|ol|pre|blockquote|hr)\b[^>]*>([\s\S]*?)<\/\1>|<hr\s*\/?\s*>/gi;
+  const blockRegex = /<(h[1-6]|p|ul|ol|pre|blockquote)\b[^>]*>([\s\S]*?)<\/\1>/gi;
   let match: RegExpExecArray | null;
   while ((match = blockRegex.exec(cleaned)) !== null) {
-    const tag = (match[1] ?? 'hr').toLowerCase();
+    const tag = match[1].toLowerCase();
     const inner = match[2] ?? '';
     if (/^h[1-6]$/.test(tag)) {
       const level = Number(tag[1]) as 1 | 2 | 3 | 4 | 5 | 6;
-      blocks.push(ctx.block.heading(level, stripTags(inner)));
-    } else if (tag === 'p') {
+      const text = stripTags(inner).trim();
+      if (text) blocks.push(ctx.block.heading(level, text));
+    } else if (tag === 'p' || tag === 'blockquote' || tag === 'pre') {
       const text = stripTags(inner).trim();
       if (text) blocks.push(ctx.block.paragraph(text));
     } else if (tag === 'ul' || tag === 'ol') {
       const items = Array.from(inner.matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi))
         .map((m) => stripTags(m[1]).trim())
-        .filter(Boolean)
-        .map((text) => ({ runs: [{ text }] }));
+        .filter(Boolean);
       if (items.length) blocks.push(ctx.block.list(items, { ordered: tag === 'ol' }));
-    } else if (tag === 'pre') {
-      const code = stripTags(inner);
-      if (code) blocks.push(ctx.block.code(code));
-    } else if (tag === 'blockquote') {
-      const text = stripTags(inner).trim();
-      if (text) blocks.push(ctx.block.quote(text));
-    } else if (tag === 'hr') {
-      blocks.push(ctx.block.divider());
     }
   }
-  // Fallback if the doc has no recognizable block tags at all.
+  // Fallback: no recognizable block tags at all.
   if (blocks.length === 0) {
     const text = stripTags(cleaned).trim();
     if (text) blocks.push(ctx.block.paragraph(text));

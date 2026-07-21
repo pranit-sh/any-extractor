@@ -1,7 +1,7 @@
 {
   "name": "any-extractor",
   "version": "3.0.0",
-  "description": "Structured document extraction for AI agents — GFM markdown, typed block tree, and positional metadata for PDF, Word, Excel, PowerPoint, OpenDocument, HTML, JSON, CSV, and plain text.",
+  "description": "Turn any document (PDF, Word, Excel, PowerPoint, OpenDocument, HTML, JSON, CSV, text) into agent-ready markdown, typed blocks, and metadata — one call, no plugins.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",

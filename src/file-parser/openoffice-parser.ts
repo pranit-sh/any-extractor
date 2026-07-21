@@ -1,191 +1,291 @@
-import type { Element, Node } from '@xmldom/xmldom';
+import type { Element } from '@xmldom/xmldom';
 import { makeSection } from '../blocks';
 import type {
   Block,
-  BlockPosition,
+  BlockPos,
+  ExtractedFile,
   ExtractMetadata,
   FileParser,
-  ListItem,
   ParserContext,
   ParserResult,
   Section,
 } from '../types';
 import { extractFiles, parseXml } from '../util';
+import { guessImageMime } from './ooxml-utils';
 
 /**
- * Parser for OpenDocument formats: `.odt`, `.ods`, `.odp`, `.odg`, `.odf`.
+ * Parser for OpenDocument formats: `.odt` (text), `.ods` (spreadsheet),
+ * and `.odp` (presentation).
  *
- * Emits a `body` section for the main content and a separate `notes` section
- * for `.odp` speaker notes. Content is parsed into structured blocks
- * (headings, paragraphs, lists, tables). Metadata is read from `meta.xml`.
+ * ODT → single `body` section.
+ * ODS → one `sheet` section per table.
+ * ODP → one `slide` section per drawing page.
  */
 export class OpenOfficeParser implements FileParser {
   readonly mimes = [
     'application/vnd.oasis.opendocument.text',
     'application/vnd.oasis.opendocument.spreadsheet',
     'application/vnd.oasis.opendocument.presentation',
-    'application/vnd.oasis.opendocument.graphics',
-    'application/vnd.oasis.opendocument.formula',
   ] as const;
 
   async parse(file: Buffer, ctx: ParserContext): Promise<ParserResult> {
-    const MAIN = 'content.xml';
-    const META = 'meta.xml';
-    const OBJECT_CONTENT = /Object \d+\/content\.xml/;
-
     const files = await extractFiles(
       file,
-      (path) => path === MAIN || path === META || OBJECT_CONTENT.test(path),
+      (path) => path === 'content.xml' || path === 'meta.xml' || path.startsWith('Pictures/'),
     );
-
-    const contentFiles = files
-      .filter((f) => f.path === MAIN || OBJECT_CONTENT.test(f.path))
-      .sort((a, b) => a.path.localeCompare(b.path));
-
-    const bodyBlocks: Block[] = [];
-    const notesBlocks: Block[] = [];
-    const headingStack: string[] = [];
-
-    for (const cf of contentFiles) {
-      const doc = parseXml(cf.content.toString());
-      const body =
-        doc.getElementsByTagName('office:body')[0] ??
-        doc.getElementsByTagName('office:text')[0] ??
-        doc.documentElement;
-      if (!body) continue;
-      walk(body as Element, {
-        headingStack,
-        push: bodyBlocks,
-        pushNotes: notesBlocks,
-        ctx,
-      });
+    const contentFile = files.find((f) => f.path === 'content.xml');
+    if (!contentFile) {
+      throw new Error('any-extractor: OpenDocument archive is missing content.xml');
     }
+    const metaFile = files.find((f) => f.path === 'meta.xml');
+    const pictures: Record<string, ExtractedFile> = {};
+    for (const f of files) if (f.path.startsWith('Pictures/')) pictures[f.path] = f;
 
-    const sections: Section[] = [];
-    if (bodyBlocks.length) sections.push(makeSection('body', bodyBlocks));
-    if (notesBlocks.length) sections.push(makeSection('notes', notesBlocks, { label: 'Notes' }));
+    const doc = parseXml(contentFile.content.toString());
+    const body = doc.getElementsByTagName('office:body')[0];
+    if (!body) return { sections: [] };
 
-    const metaFile = files.find((f) => f.path === META);
+    const kind = detectKind(body);
+    const sections =
+      kind === 'text'
+        ? extractText(body, pictures, ctx)
+        : kind === 'spreadsheet'
+          ? extractSpreadsheet(body, ctx)
+          : kind === 'presentation'
+            ? extractPresentation(body, pictures, ctx)
+            : [];
+
     const metadata = metaFile ? parseMeta(metaFile.content.toString()) : {};
     return { sections, metadata };
   }
 }
 
-// ---------------------------------------------------------------------------
-// Walker
-// ---------------------------------------------------------------------------
-
-interface Walker {
-  headingStack: string[];
-  push: Block[];
-  pushNotes: Block[];
-  ctx: ParserContext;
+function detectKind(body: Element): 'text' | 'spreadsheet' | 'presentation' | 'unknown' {
+  if (body.getElementsByTagName('office:text').length > 0) return 'text';
+  if (body.getElementsByTagName('office:spreadsheet').length > 0) return 'spreadsheet';
+  if (body.getElementsByTagName('office:presentation').length > 0) return 'presentation';
+  return 'unknown';
 }
 
-function walk(node: Element, w: Walker, insideNotes = false): void {
-  for (const c of Array.from(node.childNodes)) {
-    if (c.nodeType !== 1) continue;
-    const el = c as Element;
-    const tag = el.tagName;
-
-    if (tag === 'presentation:notes') {
-      walk(el, w, true);
-      continue;
-    }
-
-    const target = insideNotes ? w.pushNotes : w.push;
-    const pos: BlockPosition = w.headingStack.length ? { sectionPath: [...w.headingStack] } : {};
-
-    if (tag === 'text:h') {
-      const level = clampLevel(Number(el.getAttribute('text:outline-level') ?? '1'));
-      const text = collectText(el).trim();
-      while (w.headingStack.length >= level) w.headingStack.pop();
-      if (text) {
-        target.push(w.ctx.block.heading(level, text, pos));
-        w.headingStack.push(text);
-      }
-    } else if (tag === 'text:p') {
-      const text = collectText(el).trim();
-      if (text) target.push(w.ctx.block.paragraph(text, pos));
-    } else if (tag === 'text:list') {
-      const items = collectListItems(el);
-      if (items.length) target.push(w.ctx.block.list(items, { ordered: false, ...pos }));
-    } else if (tag === 'table:table') {
-      const rows = collectTable(el);
-      if (rows.length) {
-        target.push(w.ctx.block.table(rows.slice(1), { headers: rows[0], ...pos }));
-      }
-    } else {
-      walk(el, w, insideNotes);
-    }
-  }
-}
-
-function clampLevel(n: number): 1 | 2 | 3 | 4 | 5 | 6 {
-  if (!Number.isFinite(n) || n < 1) return 1;
-  if (n > 6) return 6;
-  return n as 1 | 2 | 3 | 4 | 5 | 6;
-}
-
-function collectText(node: Node): string {
-  let out = '';
-  for (const c of Array.from(node.childNodes ?? [])) {
-    if (c.nodeType === 3) out += c.nodeValue ?? '';
-    else if (c.nodeType === 1) out += collectText(c);
-  }
+function parseMeta(xml: string): Partial<ExtractMetadata> {
+  const doc = parseXml(xml);
+  const get = (tag: string): string | undefined => {
+    const el = doc.getElementsByTagName(tag)[0];
+    const v = el?.childNodes[0]?.nodeValue?.trim();
+    return v || undefined;
+  };
+  const out: Partial<ExtractMetadata> = {};
+  const title = get('dc:title');
+  if (title) out.title = title;
+  const author = get('dc:creator') ?? get('meta:initial-creator');
+  if (author) out.author = author;
   return out;
 }
 
-function collectListItems(list: Element): ListItem[] {
-  const items: ListItem[] = [];
-  for (const c of Array.from(list.childNodes)) {
-    if (c.nodeType !== 1) continue;
-    const el = c as Element;
-    if (el.tagName !== 'text:list-item') continue;
-    const paragraphs = Array.from(el.getElementsByTagName('text:p')).map((p) =>
-      collectText(p).trim(),
-    );
-    const text = paragraphs.filter(Boolean).join(' ');
-    if (text) items.push({ runs: [{ text }] });
+// ---------------------------------------------------------------------------
+// ODT (text)
+// ---------------------------------------------------------------------------
+
+function extractText(
+  body: Element,
+  pictures: Record<string, ExtractedFile>,
+  ctx: ParserContext,
+): Section[] {
+  const officeText = body.getElementsByTagName('office:text')[0];
+  if (!officeText) return [];
+  const blocks: Block[] = [];
+  const headingStack: string[] = [];
+
+  const currentPos = (): BlockPos =>
+    headingStack.length ? { sectionPath: [...headingStack] } : {};
+
+  const children = Array.from(officeText.childNodes).filter((n) => n.nodeType === 1) as Element[];
+  for (const el of children) {
+    if (el.tagName === 'text:h') {
+      const level = Math.min(6, Math.max(1, Number(el.getAttribute('text:outline-level') ?? '1')));
+      const text = textOf(el).trim();
+      if (!text) continue;
+      while (headingStack.length >= level) headingStack.pop();
+      blocks.push(ctx.block.heading(level as 1 | 2 | 3 | 4 | 5 | 6, text, currentPos()));
+      headingStack.push(text);
+    } else if (el.tagName === 'text:p') {
+      const text = textOf(el).trim();
+      if (text) blocks.push(ctx.block.paragraph(text, currentPos()));
+      collectImages(el, pictures, ctx, blocks, currentPos());
+    } else if (el.tagName === 'text:list') {
+      const items = readList(el);
+      if (items.length) blocks.push(ctx.block.list(items, currentPos()));
+    } else if (el.tagName === 'table:table') {
+      const rows = readOdfTable(el);
+      if (rows.length) {
+        blocks.push(ctx.block.table(rows.slice(1), { headers: rows[0], ...currentPos() }));
+      }
+    }
+  }
+
+  return blocks.length ? [makeSection('body', blocks)] : [];
+}
+
+function readList(list: Element): string[] {
+  const items: string[] = [];
+  for (const item of Array.from(list.getElementsByTagName('text:list-item'))) {
+    const text = textOf(item).trim();
+    if (text) items.push(text);
   }
   return items;
 }
 
-function collectTable(tbl: Element): string[][] {
+function readOdfTable(tbl: Element): string[][] {
   const rows: string[][] = [];
-  for (const r of Array.from(tbl.getElementsByTagName('table:table-row'))) {
+  for (const tr of Array.from(tbl.getElementsByTagName('table:table-row'))) {
     const row: string[] = [];
-    for (const cell of Array.from(r.getElementsByTagName('table:table-cell'))) {
-      row.push(collectText(cell).trim());
+    for (const tc of Array.from(tr.getElementsByTagName('table:table-cell'))) {
+      row.push(textOf(tc).trim());
     }
     if (row.length) rows.push(row);
   }
   return rows;
 }
 
+function collectImages(
+  el: Element,
+  pictures: Record<string, ExtractedFile>,
+  ctx: ParserContext,
+  out: Block[],
+  pos: BlockPos,
+): void {
+  for (const image of Array.from(el.getElementsByTagName('draw:image'))) {
+    const href = image.getAttribute('xlink:href');
+    if (!href) continue;
+    const media = pictures[href];
+    if (!media) continue;
+    const frame = image.parentNode as Element | null;
+    const alt = frame ? attrOfFirst(frame, 'svg:desc') : undefined;
+    out.push(
+      ctx.block.image(
+        {
+          mime: guessImageMime(media.path),
+          path: media.path,
+          bytes: media.content.length,
+          ...(alt ? { alt } : {}),
+        },
+        pos,
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Metadata
+// ODS (spreadsheet)
 // ---------------------------------------------------------------------------
 
-function parseMeta(xml: string): Partial<ExtractMetadata> {
-  const doc = parseXml(xml);
-  const get = (tag: string) => {
-    const el = doc.getElementsByTagName(tag)[0];
-    const v = el?.childNodes[0]?.nodeValue?.trim();
-    return v || undefined;
-  };
-  const created = get('meta:creation-date');
-  const modified = get('dc:date');
-  const keywords = Array.from(doc.getElementsByTagName('meta:keyword'))
-    .map((n) => n.childNodes[0]?.nodeValue?.trim())
-    .filter((s): s is string => Boolean(s));
-  return {
-    title: get('dc:title'),
-    author: get('meta:initial-creator') ?? get('dc:creator'),
-    subject: get('dc:subject'),
-    language: get('dc:language'),
-    keywords: keywords.length ? keywords : undefined,
-    createdAt: created ? new Date(created) : undefined,
-    modifiedAt: modified ? new Date(modified) : undefined,
-  };
+function extractSpreadsheet(body: Element, ctx: ParserContext): Section[] {
+  const spread = body.getElementsByTagName('office:spreadsheet')[0];
+  if (!spread) return [];
+  const sections: Section[] = [];
+  const tables = Array.from(spread.getElementsByTagName('table:table'));
+  for (let i = 0; i < tables.length; i++) {
+    const tbl = tables[i];
+    const name = tbl.getAttribute('table:name') ?? `Sheet${i + 1}`;
+    const rows = readOdfSheet(tbl);
+    if (rows.length === 0) continue;
+    const blocks: Block[] = [
+      ctx.block.table(rows.slice(1), { headers: rows[0], sectionPath: [name] }),
+    ];
+    sections.push(makeSection('sheet', blocks, { index: i + 1, label: name }));
+  }
+  return sections;
+}
+
+function readOdfSheet(tbl: Element): string[][] {
+  const rows: string[][] = [];
+  for (const tr of Array.from(tbl.getElementsByTagName('table:table-row'))) {
+    const row: string[] = [];
+    for (const tc of Array.from(tr.getElementsByTagName('table:table-cell'))) {
+      const repeat = Number(tc.getAttribute('table:number-columns-repeated') ?? '1') || 1;
+      const value = textOf(tc).trim();
+      for (let r = 0; r < Math.min(repeat, 1000); r++) row.push(value);
+    }
+    while (row.length && row[row.length - 1] === '') row.pop();
+    if (row.length) rows.push(row);
+  }
+  return rows;
+}
+
+// ---------------------------------------------------------------------------
+// ODP (presentation)
+// ---------------------------------------------------------------------------
+
+function extractPresentation(
+  body: Element,
+  pictures: Record<string, ExtractedFile>,
+  ctx: ParserContext,
+): Section[] {
+  const pres = body.getElementsByTagName('office:presentation')[0];
+  if (!pres) return [];
+  const sections: Section[] = [];
+  const pages = Array.from(pres.getElementsByTagName('draw:page'));
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    const name = page.getAttribute('draw:name') ?? `Slide ${i + 1}`;
+    const blocks: Block[] = [];
+    let titleTaken = false;
+
+    for (const frame of Array.from(page.getElementsByTagName('draw:frame'))) {
+      const cls = frame.getAttribute('presentation:class') ?? '';
+      const texts = Array.from(frame.getElementsByTagName('text:p'))
+        .map((p) => textOf(p).trim())
+        .filter(Boolean);
+      if (cls === 'title' && !titleTaken && texts[0]) {
+        blocks.push(ctx.block.heading(2, texts[0]));
+        titleTaken = true;
+        for (const t of texts.slice(1)) blocks.push(ctx.block.paragraph(t));
+      } else if (texts.length) {
+        // If the frame has explicit bullet lists we would surface them;
+        // ODP typically uses `<text:list>` here, so we do the same.
+        const listEl = frame.getElementsByTagName('text:list')[0];
+        if (listEl) {
+          const items = readList(listEl);
+          if (items.length) blocks.push(ctx.block.list(items, {}));
+        } else {
+          for (const t of texts) blocks.push(ctx.block.paragraph(t));
+        }
+      }
+      collectImages(frame, pictures, ctx, blocks, {});
+    }
+    if (blocks.length === 0) continue;
+    sections.push(makeSection('slide', blocks, { index: i + 1, label: name }));
+  }
+  return sections;
+}
+
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+/** Recursive text extraction that preserves inline line breaks. */
+function textOf(el: Element): string {
+  return textOfInner(el).replace(/\s+/g, ' ').trim();
+}
+
+function textOfInner(el: Element): string {
+  let out = '';
+  for (const child of Array.from(el.childNodes)) {
+    if (child.nodeType === 3) {
+      out += child.nodeValue ?? '';
+    } else if (child.nodeType === 1) {
+      const c = child as Element;
+      if (c.tagName === 'text:line-break') out += '\n';
+      else out += textOfInner(c);
+    }
+  }
+  return out;
+}
+
+/** Return the text content of the first descendant with the given tag. */
+function attrOfFirst(root: Element, tag: string): string | undefined {
+  const el = root.getElementsByTagName(tag)[0];
+  if (!el) return undefined;
+  const t = el.childNodes[0]?.nodeValue?.trim();
+  return t || undefined;
 }

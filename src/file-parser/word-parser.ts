@@ -2,15 +2,12 @@ import type { Element } from '@xmldom/xmldom';
 import { makeSection } from '../blocks';
 import type {
   Block,
-  BlockPosition,
+  BlockPos,
   ExtractedFile,
   FileParser,
-  InlineRun,
-  ListItem,
   ParserContext,
   ParserResult,
   Section,
-  SectionKind,
 } from '../types';
 import { extractFiles, parseXml } from '../util';
 import { guessImageMime, parseCoreProperties } from './ooxml-utils';
@@ -18,9 +15,9 @@ import { guessImageMime, parseCoreProperties } from './ooxml-utils';
 /**
  * Parser for `.docx` (Office Open XML) files.
  *
- * Emits a `body` section plus optional `footnote` / `endnote` sections.
- * Content is parsed into structured blocks: headings (from `pStyle`),
- * paragraphs (with bold / italic / hyperlink runs), lists (from `numPr`),
+ * Emits a single `body` section. Content is parsed into structured blocks:
+ * headings (from `pStyle`), paragraphs with inline markdown (bold / italic
+ * / hyperlinks baked in), lists (from `numPr` / `ListParagraph` style),
  * tables, and inline images.
  */
 export class WordParser implements FileParser {
@@ -30,8 +27,6 @@ export class WordParser implements FileParser {
 
   async parse(file: Buffer, context: ParserContext): Promise<ParserResult> {
     const mainRegex = /word\/document\d*\.xml/;
-    const footnotesRegex = /word\/footnotes\d*\.xml/;
-    const endnotesRegex = /word\/endnotes\d*\.xml/;
     const mediaRegex = /^word\/media\//;
     const relsRegex = /^word\/_rels\/document\.xml\.rels$/;
     const coreRegex = /^docProps\/core\.xml$/;
@@ -39,9 +34,10 @@ export class WordParser implements FileParser {
     const files = await extractFiles(
       file,
       (path) =>
-        [mainRegex, footnotesRegex, endnotesRegex, relsRegex, coreRegex].some((r) =>
-          r.test(path),
-        ) || mediaRegex.test(path),
+        mainRegex.test(path) ||
+        relsRegex.test(path) ||
+        coreRegex.test(path) ||
+        mediaRegex.test(path),
     );
 
     const find = (regex: RegExp) => files.find((f) => regex.test(f.path));
@@ -55,29 +51,12 @@ export class WordParser implements FileParser {
     for (const f of files) {
       if (mediaRegex.test(f.path)) media[f.path.split('/').pop()!] = f;
     }
-
     const rels = parseRelationships(relsFile.content.toString());
 
+    const blocks = extractBlocks(mainDoc.content.toString(), rels, media, context);
+
     const sections: Section[] = [];
-
-    const body = await extractBlocks(mainDoc.content.toString(), rels, media, context);
-    if (body.length) sections.push(makeSection('body', body));
-
-    const footnotes = find(footnotesRegex);
-    if (footnotes) {
-      const blocks = await extractBlocks(footnotes.content.toString(), rels, media, context);
-      if (blocks.length) {
-        sections.push(makeSection('footnote' as SectionKind, blocks, { label: 'Footnotes' }));
-      }
-    }
-
-    const endnotes = find(endnotesRegex);
-    if (endnotes) {
-      const blocks = await extractBlocks(endnotes.content.toString(), rels, media, context);
-      if (blocks.length) {
-        sections.push(makeSection('endnote' as SectionKind, blocks, { label: 'Endnotes' }));
-      }
-    }
+    if (blocks.length) sections.push(makeSection('body', blocks));
 
     const coreFile = find(coreRegex);
     const metadata = coreFile ? parseCoreProperties(coreFile.content.toString()) : {};
@@ -90,8 +69,8 @@ export class WordParser implements FileParser {
 // ---------------------------------------------------------------------------
 
 interface Relationships {
-  media: Record<string, string>; // rId → media filename
-  hyperlinks: Record<string, string>; // rId → URL
+  media: Record<string, string>;
+  hyperlinks: Record<string, string>;
 }
 
 function parseRelationships(xml: string): Relationships {
@@ -116,21 +95,21 @@ function parseRelationships(xml: string): Relationships {
 // Body → blocks
 // ---------------------------------------------------------------------------
 
-async function extractBlocks(
+function extractBlocks(
   xml: string,
   rels: Relationships,
   media: Record<string, ExtractedFile>,
   ctx: ParserContext,
-): Promise<Block[]> {
+): Block[] {
   const doc = parseXml(xml);
   const bodyEl = doc.getElementsByTagName('w:body')[0] ?? doc.documentElement;
   if (!bodyEl) return [];
 
   const blocks: Block[] = [];
   const headingStack: string[] = [];
-  let listBuffer: { items: ListItem[]; ordered: boolean; pos: BlockPosition } | null = null;
+  let listBuffer: { items: string[]; ordered: boolean; pos: BlockPos } | null = null;
 
-  const flushList = () => {
+  const flushList = (): void => {
     if (listBuffer && listBuffer.items.length) {
       blocks.push(
         ctx.block.list(listBuffer.items, { ordered: listBuffer.ordered, ...listBuffer.pos }),
@@ -139,7 +118,7 @@ async function extractBlocks(
     listBuffer = null;
   };
 
-  const currentPos = (): BlockPosition =>
+  const currentPos = (): BlockPos =>
     headingStack.length ? { sectionPath: [...headingStack] } : {};
 
   const children = Array.from(bodyEl.childNodes).filter((n) => n.nodeType === 1) as Element[];
@@ -152,47 +131,43 @@ async function extractBlocks(
           flushList();
           listBuffer = { items: [], ordered: info.list.ordered, pos: currentPos() };
         }
-        listBuffer.items.push({ runs: info.runs });
+        listBuffer.items.push(info.text);
         continue;
       }
       flushList();
 
       if (info.headingLevel) {
-        const text = runsToPlain(info.runs);
-        // Maintain heading stack: pop deeper/equal, then push this one.
+        const plainText = info.plainText;
         while (headingStack.length >= info.headingLevel) headingStack.pop();
-        blocks.push(ctx.block.heading(info.headingLevel, text, currentPos()));
-        headingStack.push(text);
+        blocks.push(ctx.block.heading(info.headingLevel, plainText, currentPos()));
+        headingStack.push(plainText);
         continue;
       }
 
-      if (info.runs.length === 0 && info.images.length === 0) continue;
+      if (info.text.length === 0 && info.images.length === 0) continue;
+      if (info.text.length) blocks.push(ctx.block.paragraph(info.text, currentPos()));
 
-      if (info.runs.length) {
-        blocks.push(ctx.block.paragraph(info.runs, currentPos()));
-      }
       for (const img of info.images) {
         const media0 = media[img.mediaName];
         if (!media0) continue;
         const mime = guessImageMime(media0.path);
-        const description = (await ctx.describe(media0.content)) || undefined;
         blocks.push(
           ctx.block.image(
-            { mime, path: media0.path, bytes: media0.content.length, alt: img.alt, description },
+            {
+              mime,
+              path: media0.path,
+              bytes: media0.content.length,
+              ...(img.alt ? { alt: img.alt } : {}),
+            },
             currentPos(),
           ),
         );
       }
     } else if (el.tagName === 'w:tbl') {
       flushList();
-      const table = readTable(el);
-      if (table.rows.length) {
-        blocks.push(
-          ctx.block.table(table.rows.slice(1), {
-            headers: table.rows[0],
-            ...currentPos(),
-          }),
-        );
+      const rows = readTable(el);
+      if (rows.length) {
+        blocks.push(ctx.block.table(rows.slice(1), { headers: rows[0], ...currentPos() }));
       }
     }
   }
@@ -201,18 +176,21 @@ async function extractBlocks(
 }
 
 // ---------------------------------------------------------------------------
-// Paragraph reader
+// Paragraph reader — builds an inline markdown string
 // ---------------------------------------------------------------------------
 
 interface ParagraphInfo {
-  runs: InlineRun[];
+  /** Inline GFM markdown string. */
+  text: string;
+  /** Plain text (no formatting) — used for heading text and heading stack. */
+  plainText: string;
   images: { mediaName: string; alt?: string }[];
   headingLevel?: 1 | 2 | 3 | 4 | 5 | 6;
   list?: { ordered: boolean };
 }
 
 function readParagraph(p: Element, rels: Relationships): ParagraphInfo {
-  const info: ParagraphInfo = { runs: [], images: [] };
+  const info: ParagraphInfo = { text: '', plainText: '', images: [] };
   const pPr = firstChild(p, 'w:pPr');
   if (pPr) {
     const style = attrOfFirst(pPr, 'w:pStyle', 'w:val');
@@ -228,73 +206,86 @@ function readParagraph(p: Element, rels: Relationships): ParagraphInfo {
     }
     const numPr = firstChild(pPr, 'w:numPr');
     if (numPr && !info.headingLevel) {
-      // We don't resolve numbering.xml here — treat every list paragraph
-      // as unordered. Cheap, predictable, good enough for LLM consumption.
+      // We don't resolve numbering.xml — treat every list paragraph as
+      // unordered. Cheap, predictable, good enough for LLM consumption.
       info.list = { ordered: false };
     }
   }
 
-  // Walk paragraph children in order to build runs.
-  walkRuns(p, rels, info);
-  // Trim empty leading/trailing runs.
-  info.runs = info.runs.filter((r) => r.text.length > 0);
+  const parts: { md: string; plain: string }[] = [];
+  walkRuns(p, rels, parts);
+  info.text = parts
+    .map((p) => p.md)
+    .join('')
+    .trim();
+  info.plainText = parts
+    .map((p) => p.plain)
+    .join('')
+    .trim();
+
+  // Also collect embedded images at the paragraph level.
+  for (const drawing of Array.from(p.getElementsByTagName('w:drawing'))) {
+    const embed = attrOfFirst(drawing, 'a:blip', 'r:embed');
+    const alt =
+      attrOfFirst(drawing, 'wp:docPr', 'descr') ??
+      attrOfFirst(drawing, 'wp:docPr', 'title') ??
+      undefined;
+    if (embed && rels.media[embed]) {
+      const entry: { mediaName: string; alt?: string } = { mediaName: rels.media[embed] };
+      if (alt) entry.alt = alt;
+      info.images.push(entry);
+    }
+  }
+
   return info;
 }
 
-function walkRuns(node: Element, rels: Relationships, info: ParagraphInfo): void {
+function walkRuns(
+  node: Element,
+  rels: Relationships,
+  parts: { md: string; plain: string }[],
+): void {
   const children = Array.from(node.childNodes).filter((n) => n.nodeType === 1) as Element[];
   for (const el of children) {
     if (el.tagName === 'w:r') {
-      const run = readRun(el);
-      if (run) info.runs.push(run);
-      // pictures embedded inside a run
-      for (const drawing of Array.from(el.getElementsByTagName('w:drawing'))) {
-        const embed = attrOfFirst(drawing, 'a:blip', 'r:embed');
-        const alt =
-          attrOfFirst(drawing, 'wp:docPr', 'descr') ??
-          attrOfFirst(drawing, 'wp:docPr', 'title') ??
-          undefined;
-        if (embed && rels.media[embed]) {
-          info.images.push({ mediaName: rels.media[embed], alt });
-        }
+      const rPr = firstChild(el, 'w:rPr');
+      const bold = rPr ? hasChild(rPr, 'w:b') : false;
+      const italic = rPr ? hasChild(rPr, 'w:i') : false;
+      let raw = '';
+      for (const t of Array.from(el.getElementsByTagName('w:t'))) {
+        raw += t.childNodes[0]?.nodeValue ?? '';
       }
+      if (!raw) continue;
+      let md = escapeInline(raw);
+      if (bold) md = `**${md}**`;
+      if (italic) md = `*${md}*`;
+      parts.push({ md, plain: raw });
     } else if (el.tagName === 'w:hyperlink') {
       const rId = el.getAttribute('r:id');
       const href = rId ? rels.hyperlinks[rId] : undefined;
-      const before = info.runs.length;
-      walkRuns(el, rels, info);
+      const before = parts.length;
+      walkRuns(el, rels, parts);
       if (href) {
-        for (let i = before; i < info.runs.length; i++) info.runs[i].href = href;
+        const inner = parts
+          .slice(before)
+          .map((p) => p.md)
+          .join('');
+        const plain = parts
+          .slice(before)
+          .map((p) => p.plain)
+          .join('');
+        parts.length = before;
+        parts.push({ md: `[${inner}](${href})`, plain });
       }
     }
   }
-}
-
-function readRun(r: Element): InlineRun | null {
-  const rPr = firstChild(r, 'w:rPr');
-  const bold = rPr ? hasChild(rPr, 'w:b') : false;
-  const italic = rPr ? hasChild(rPr, 'w:i') : false;
-  const code =
-    rPr && (attrOfFirst(rPr, 'w:rFonts', 'w:ascii') ?? '').toLowerCase().includes('mono');
-  let text = '';
-  for (const t of Array.from(r.getElementsByTagName('w:t'))) {
-    text += t.childNodes[0]?.nodeValue ?? '';
-  }
-  text += '\t'.repeat(r.getElementsByTagName('w:tab').length);
-  text += '\n'.repeat(r.getElementsByTagName('w:br').length);
-  if (!text) return null;
-  const run: InlineRun = { text };
-  if (bold) run.bold = true;
-  if (italic) run.italic = true;
-  if (code) run.code = true;
-  return run;
 }
 
 // ---------------------------------------------------------------------------
 // Table reader
 // ---------------------------------------------------------------------------
 
-function readTable(tbl: Element): { rows: string[][] } {
+function readTable(tbl: Element): string[][] {
   const rows: string[][] = [];
   for (const tr of Array.from(tbl.getElementsByTagName('w:tr'))) {
     const row: string[] = [];
@@ -307,7 +298,7 @@ function readTable(tbl: Element): { rows: string[][] } {
     }
     if (row.length) rows.push(row);
   }
-  return { rows };
+  return rows;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,14 +311,17 @@ function firstChild(el: Element, tag: string): Element | null {
   }
   return null;
 }
+
 function hasChild(el: Element, tag: string): boolean {
   return firstChild(el, tag) !== null;
 }
+
 function attrOfFirst(root: Element, tag: string, attr: string): string | undefined {
   const el = root.getElementsByTagName(tag)[0];
   return el?.getAttribute(attr) ?? undefined;
 }
 
-function runsToPlain(runs: InlineRun[]): string {
-  return runs.map((r) => r.text).join('');
+/** Escape the small set of inline markdown metacharacters we care about. */
+function escapeInline(text: string): string {
+  return text.replace(/([\\`*_[\]])/g, '\\$1');
 }

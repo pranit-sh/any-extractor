@@ -1,9 +1,9 @@
-import * as posix from 'path/posix';
 import type { Element } from '@xmldom/xmldom';
 import { makeSection } from '../blocks';
 import type {
   Block,
-  ExtractMetadata,
+  BlockPos,
+  ExtractedFile,
   FileParser,
   ParserContext,
   ParserResult,
@@ -13,192 +13,195 @@ import { extractFiles, parseXml } from '../util';
 import { guessImageMime, parseCoreProperties } from './ooxml-utils';
 
 /**
- * Parser for `.pptx` files.
- *
- * Emits one `slide` section per slide with a title heading (when present),
- * body paragraphs, and any inline images. Speaker notes get their own
- * `notes` section immediately after each slide.
+ * Parser for `.pptx` decks. Emits one {@link Section} per slide
+ * (`kind: 'slide'`) containing headings/paragraphs/lists/tables/images.
  */
 export class PowerPointParser implements FileParser {
   readonly mimes = [
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   ] as const;
 
-  async parse(file: Buffer, context: ParserContext): Promise<ParserResult> {
-    const slideXmlRegex = /^ppt\/slides\/slide(\d+)\.xml$/;
-    const slideRelsRegex = /^ppt\/slides\/_rels\/slide(\d+)\.xml\.rels$/;
-    const notesXmlRegex = /^ppt\/notesSlides\/notesSlide(\d+)\.xml$/;
-    const imageRegex = /^ppt\/media\/image\d+\..+$/i;
-    const coreRegex = /^docProps\/core\.xml$/;
-
-    const files = await extractFiles(
-      file,
-      (p) =>
-        slideXmlRegex.test(p) ||
-        slideRelsRegex.test(p) ||
-        notesXmlRegex.test(p) ||
-        imageRegex.test(p) ||
-        coreRegex.test(p),
+  async parse(file: Buffer, ctx: ParserContext): Promise<ParserResult> {
+    const files = await extractFiles(file, (path) =>
+      /^ppt\/(slides\/slide\d+\.xml|slides\/_rels\/slide\d+\.xml\.rels|media\/)|^docProps\/core\.xml$/.test(
+        path,
+      ),
     );
 
-    const slides: Record<number, string> = {};
-    const rels: Record<number, { path: string; xml: string }> = {};
-    const notes: Record<number, string> = {};
-    const images: Record<string, Buffer> = {};
-    let coreXml: string | undefined;
-
+    const slideFiles = files
+      .filter((f) => /^ppt\/slides\/slide\d+\.xml$/.test(f.path))
+      .sort((a, b) => slideIndex(a.path) - slideIndex(b.path));
+    const relsByPath: Record<string, ExtractedFile> = {};
     for (const f of files) {
-      let m: RegExpMatchArray | null;
-      if ((m = f.path.match(slideXmlRegex))) slides[+m[1]] = f.content.toString();
-      else if ((m = f.path.match(slideRelsRegex)))
-        rels[+m[1]] = { path: f.path, xml: f.content.toString() };
-      else if ((m = f.path.match(notesXmlRegex))) notes[+m[1]] = f.content.toString();
-      else if (imageRegex.test(f.path)) images[f.path] = f.content;
-      else if (coreRegex.test(f.path)) coreXml = f.content.toString();
+      if (/^ppt\/slides\/_rels\/slide\d+\.xml\.rels$/.test(f.path)) relsByPath[f.path] = f;
     }
+    const media: Record<string, ExtractedFile> = {};
+    for (const f of files) {
+      if (/^ppt\/media\//.test(f.path)) media[f.path.split('/').pop()!] = f;
+    }
+    const coreFile = files.find((f) => f.path === 'docProps/core.xml');
 
-    const orderedSlides = Object.keys(slides)
-      .map(Number)
-      .sort((a, b) => a - b);
     const sections: Section[] = [];
+    for (let i = 0; i < slideFiles.length; i++) {
+      const slide = slideFiles[i];
+      const idx = slideIndex(slide.path);
+      const relsPath = `ppt/slides/_rels/slide${idx}.xml.rels`;
+      const rels = relsByPath[relsPath]
+        ? parseSlideRelationships(relsByPath[relsPath].content.toString())
+        : { media: {} };
 
-    for (const n of orderedSlides) {
-      const slideBlocks: Block[] = [];
-      const doc = parseXml(slides[n]);
-      const { title, paragraphs } = extractSlideTextStructured(doc);
-      const posBase = { page: n };
-
-      if (title) {
-        slideBlocks.push(context.block.heading(2, title, posBase));
-      }
-      for (const p of paragraphs) {
-        slideBlocks.push(context.block.paragraph(p, posBase));
-      }
-
-      // Images
-      const rel = rels[n];
-      if (rel) {
-        const anchor = posix.dirname(posix.dirname(rel.path));
-        const relTargetsByRid = extractImageRelsByRid(rel.xml);
-        const altByRid = extractSlidePictureAltByRid(slides[n]);
-        for (const [rid, target] of relTargetsByRid) {
-          const fullPath = posix.normalize(posix.join(anchor, target));
-          const buffer = images[fullPath];
-          if (!buffer) continue;
-          const mime = guessImageMime(fullPath);
-          const description = (await context.describe(buffer)) || undefined;
-          const alt = altByRid.get(rid);
-          slideBlocks.push(
-            context.block.image(
-              {
-                mime,
-                path: fullPath,
-                bytes: buffer.length,
-                ...(alt ? { alt } : {}),
-                description,
-              },
-              posBase,
-            ),
-          );
-        }
-      }
-
-      if (slideBlocks.length) {
-        sections.push(makeSection('slide', slideBlocks, { index: n, label: `Slide ${n}` }));
-      }
-
-      // Notes
-      const notesXml = notes[n];
-      if (notesXml) {
-        const { paragraphs: notesParas } = extractSlideTextStructured(parseXml(notesXml));
-        const notesBlocks = notesParas.map((p) => context.block.paragraph(p, { page: n }));
-        if (notesBlocks.length) {
-          sections.push(
-            makeSection('notes', notesBlocks, {
-              index: n,
-              label: `Slide ${n} — Notes`,
-            }),
-          );
-        }
-      }
+      const blocks = extractSlideBlocks(slide.content.toString(), rels, media, ctx);
+      if (blocks.length === 0) continue;
+      sections.push(makeSection('slide', blocks, { index: idx, label: `Slide ${idx}` }));
     }
 
-    const metadata: Partial<ExtractMetadata> = {
-      slideCount: orderedSlides.length,
-      ...(coreXml ? parseCoreProperties(coreXml) : {}),
+    const metadata = {
+      ...(coreFile ? parseCoreProperties(coreFile.content.toString()) : {}),
+      slideCount: slideFiles.length,
     };
+
     return { sections, metadata };
   }
 }
 
-/**
- * Walk a slide XML and pick out the title (from a shape marked as a title
- * placeholder) plus the remaining body paragraphs.
- */
-function extractSlideTextStructured(doc: ReturnType<typeof parseXml>): {
-  title?: string;
-  paragraphs: string[];
-} {
-  const paragraphs: string[] = [];
-  let title: string | undefined;
+function slideIndex(path: string): number {
+  const m = /slide(\d+)\.xml/.exec(path);
+  return m ? Number(m[1]) : 0;
+}
 
-  const shapes = Array.from(doc.getElementsByTagName('p:sp')) as Element[];
-  for (const sp of shapes) {
-    const isTitle = shapeIsTitle(sp);
-    const shapeParas = Array.from(sp.getElementsByTagName('a:p')).map(paragraphText);
-    if (isTitle) {
-      const joined = shapeParas.filter(Boolean).join(' ').trim();
-      if (joined && !title) title = joined;
-      continue;
+interface SlideRelationships {
+  media: Record<string, string>;
+}
+
+function parseSlideRelationships(xml: string): SlideRelationships {
+  const doc = parseXml(xml);
+  const media: Record<string, string> = {};
+  for (const rel of Array.from(doc.getElementsByTagName('Relationship'))) {
+    const id = rel.getAttribute('Id');
+    const target = rel.getAttribute('Target');
+    const type = rel.getAttribute('Type') ?? '';
+    if (!id || !target) continue;
+    if (type.endsWith('/image')) {
+      media[id] = target.split('/').pop()!;
     }
-    for (const t of shapeParas) if (t) paragraphs.push(t);
   }
-  return { title, paragraphs };
+  return { media };
 }
 
-function shapeIsTitle(sp: Element): boolean {
-  const phList = sp.getElementsByTagName('p:ph');
-  if (!phList || phList.length === 0) return false;
-  const type = phList[0].getAttribute('type') ?? '';
-  return type === 'title' || type === 'ctrTitle';
-}
+function extractSlideBlocks(
+  xml: string,
+  rels: SlideRelationships,
+  media: Record<string, ExtractedFile>,
+  ctx: ParserContext,
+): Block[] {
+  const doc = parseXml(xml);
+  const spTree = doc.getElementsByTagName('p:spTree')[0] ?? doc.documentElement;
+  if (!spTree) return [];
 
-function paragraphText(p: Element): string {
-  const runs = Array.from(p.getElementsByTagName('a:t'));
-  return runs
-    .map((t) => t.childNodes[0]?.nodeValue ?? '')
-    .join('')
-    .trim();
-}
+  const blocks: Block[] = [];
+  let firstText = true;
 
-function extractImageRelsByRid(xml?: string): Map<string, string> {
-  const out = new Map<string, string>();
-  if (!xml) return out;
-  const rels = parseXml(xml).getElementsByTagName('Relationship');
-  for (const r of Array.from(rels)) {
-    const type = r.getAttribute('Type') ?? '';
-    const target = r.getAttribute('Target');
-    const id = r.getAttribute('Id');
-    if (id && target && type.includes('/image')) out.set(id, target);
+  const shapes = Array.from(spTree.childNodes).filter((n) => n.nodeType === 1) as Element[];
+  for (const shape of shapes) {
+    if (shape.tagName === 'p:sp') {
+      const { paragraphs, isTitle } = readShapeParagraphs(shape);
+      // Group consecutive bullet paragraphs into a list.
+      let bulletBuffer: string[] = [];
+      const flushBullets = (): void => {
+        if (bulletBuffer.length) {
+          blocks.push(ctx.block.list(bulletBuffer, {}));
+          bulletBuffer = [];
+        }
+      };
+      for (const p of paragraphs) {
+        if (p.bullet) {
+          bulletBuffer.push(p.text);
+        } else {
+          flushBullets();
+          if (!p.text) continue;
+          if (isTitle && firstText) {
+            blocks.push(ctx.block.heading(2, p.text));
+            firstText = false;
+          } else {
+            blocks.push(ctx.block.paragraph(p.text));
+          }
+        }
+      }
+      flushBullets();
+    } else if (shape.tagName === 'p:graphicFrame') {
+      const rows = readGraphicFrameTable(shape);
+      if (rows.length) blocks.push(ctx.block.table(rows.slice(1), { headers: rows[0] }));
+    } else if (shape.tagName === 'p:pic') {
+      const embed = attrOfFirst(shape, 'a:blip', 'r:embed');
+      const alt =
+        attrOfFirst(shape, 'p:cNvPr', 'descr') ??
+        attrOfFirst(shape, 'p:cNvPr', 'title') ??
+        undefined;
+      const name = embed ? rels.media[embed] : undefined;
+      const media0 = name ? media[name] : undefined;
+      if (media0) {
+        const pos: BlockPos = {};
+        blocks.push(
+          ctx.block.image(
+            {
+              mime: guessImageMime(media0.path),
+              path: media0.path,
+              bytes: media0.content.length,
+              ...(alt ? { alt } : {}),
+            },
+            pos,
+          ),
+        );
+      }
+    }
   }
-  return out;
+  return blocks;
 }
 
-/**
- * Walk each `<p:pic>` in a slide and map its embed relationship id to the
- * `descr` (or `title`) attribute on `<p:cNvPr>` \u2014 the alt text.
- */
-function extractSlidePictureAltByRid(xml: string): Map<string, string> {
-  const out = new Map<string, string>();
-  const pics = parseXml(xml).getElementsByTagName('p:pic');
-  for (const pic of Array.from(pics)) {
-    const cNvPr = pic.getElementsByTagName('p:cNvPr')[0];
-    const blip = pic.getElementsByTagName('a:blip')[0];
-    if (!cNvPr || !blip) continue;
-    const rid = blip.getAttribute('r:embed');
-    if (!rid) continue;
-    const alt = (cNvPr.getAttribute('descr') ?? cNvPr.getAttribute('title') ?? '').trim();
-    if (alt) out.set(rid, alt);
+function readShapeParagraphs(shape: Element): {
+  paragraphs: { text: string; bullet: boolean }[];
+  isTitle: boolean;
+} {
+  const paragraphs: { text: string; bullet: boolean }[] = [];
+  const ph = shape.getElementsByTagName('p:ph')[0];
+  const phType = ph?.getAttribute('type') ?? '';
+  const isTitle = phType === 'title' || phType === 'ctrTitle';
+
+  for (const p of Array.from(shape.getElementsByTagName('a:p'))) {
+    const text = Array.from(p.getElementsByTagName('a:t'))
+      .map((t) => t.childNodes[0]?.nodeValue ?? '')
+      .join('')
+      .trim();
+    // A paragraph is a bullet if it has an explicit bullet marker
+    // (a:buChar / a:buAutoNum). We treat "no explicit bullet" as
+    // non-bullet regardless of layout — cleaner output for LLMs.
+    const bullet =
+      p.getElementsByTagName('a:buChar').length > 0 ||
+      p.getElementsByTagName('a:buAutoNum').length > 0;
+    paragraphs.push({ text, bullet: bullet && !isTitle });
   }
-  return out;
+  return { paragraphs, isTitle };
+}
+
+function readGraphicFrameTable(frame: Element): string[][] {
+  const tbl = frame.getElementsByTagName('a:tbl')[0];
+  if (!tbl) return [];
+  const rows: string[][] = [];
+  for (const tr of Array.from(tbl.getElementsByTagName('a:tr'))) {
+    const row: string[] = [];
+    for (const tc of Array.from(tr.getElementsByTagName('a:tc'))) {
+      const text = Array.from(tc.getElementsByTagName('a:t'))
+        .map((t) => t.childNodes[0]?.nodeValue ?? '')
+        .join('')
+        .trim();
+      row.push(text);
+    }
+    if (row.length) rows.push(row);
+  }
+  return rows;
+}
+
+function attrOfFirst(root: Element, tag: string, attr: string): string | undefined {
+  const el = root.getElementsByTagName(tag)[0];
+  return el?.getAttribute(attr) ?? undefined;
 }
