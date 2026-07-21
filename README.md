@@ -4,6 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/any-extractor.svg)](https://www.npmjs.com/package/any-extractor)
 [![license](https://img.shields.io/npm/l/any-extractor.svg)](./LICENSE)
+[![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
 
 `any-extractor` turns whatever file you point it at into three things:
 
@@ -11,7 +12,7 @@
 2. **`sections`** — ordered pages / slides / sheets / body sections, each with typed blocks _and_ their own markdown.
 3. **`metadata`** — MIME type, title, author, page/slide counts, sheet names.
 
-No streaming APIs. No chunking. No footguns. It parses the file and gives you clean, structured output — and if you want to bolt in your own parser (vision LLM for images, custom XML dialect, whatever), there's a one-liner for that too.
+Input can be a file path, URL, or `Buffer`. MIME type is detected automatically. Custom parsers can be registered via `AnyExtractor.addParser()` to override built-ins or add new MIME handlers (see [Custom parsers](#custom-parsers)).
 
 > **What's new in 3.0**
 >
@@ -169,9 +170,10 @@ extractor.addParser({
 const result = await extractor.extract('./slides.pptx');
 ```
 
-A few things happen automatically once that image parser is registered:
+Once a parser is registered:
 
 - Direct calls like `extractor.extract('./photo.png')` route to your parser.
+- **User parsers override built-ins** for the same MIME.
 - **Embedded images inside Word, PowerPoint, and OpenDocument files are enriched.** Every image block gets a `text` field with your parser's output, and its markdown rendering picks up a blockquote caption:
 
   ```markdown
@@ -179,10 +181,6 @@ A few things happen automatically once that image parser is registered:
 
   > Bar chart showing Q3 revenue up 18% vs. Q2, driven by APAC.
   ```
-
-- **User parsers win over built-ins.** Register a parser for `application/pdf` and it replaces the bundled PDF parser.
-- **Image-parser errors are swallowed.** If your vision model throws, the image block is emitted without `text` — the rest of the document still comes through cleanly.
-- **No recursion.** When your image parser runs, `ctx.parseImage(...)` is a no-op, so you can't accidentally build an infinite loop.
 
 The `ctx` handed to your parser gives you the same building blocks the built-in parsers use:
 
@@ -220,6 +218,10 @@ This package is aimed at feeding documents into agents, RAG pipelines, and LLM w
 - **Deterministic output.** Same file in → same ids out, so you can cache/upsert without churn.
 
 If you need lower-level control (streaming, footnote extraction, styling metadata), this isn't the library — reach for `pdf.js`, `mammoth`, or `unoconv` directly.
+
+## Support
+
+If `any-extractor` saved you an afternoon, you can [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-BD5FFF?style=flat&logo=buy-me-a-coffee&logoColor=ffffff&labelColor=BD5FFF)](https://www.buymeacoffee.com/pranit.sh) — it keeps the parsers fed.
 
 ## License
 
