@@ -132,7 +132,7 @@ Rules for the plain-text render (deterministic, no third-party dependencies):
 
 ## The block model
 
-Five block types. That's the whole thing.
+Five block types.
 
 ```ts
 type Block = Heading | Paragraph | List | Table | Image;
@@ -245,17 +245,59 @@ try {
 
 `UnsupportedFileTypeError` is thrown when no built-in or user-registered parser matches the sniffed MIME. Add a matching parser via `new AnyExtractor().addParser({ mimes: [...], parse })` to handle it.
 
-## Why this scope
+## MCP server
 
-This package is aimed at feeding documents into agents, RAG pipelines, and LLM workflows. That means:
+`any-extractor` also ships as a [Model Context Protocol](https://modelcontextprotocol.io) server, so agents in Claude Desktop, Cursor, VS Code, Continue, or any other MCP-capable client can extract documents directly — no glue code, no shell-outs.
 
-- **One entry point for the 90% case.** `extract(input)` — no factories, no builders, no options that only three people ever need.
-- **One escape hatch for the last 10%.** `new AnyExtractor().addParser(...)` when you want to swap in a vision LLM, a stricter PDF backend, or your own MIME.
-- **Markdown first.** LLMs are already trained on it; every block can be re-rendered without a separate template.
-- **Provenance built in.** `page`, `sectionPath`, and `id` on every block, so citations and dedup are trivial.
-- **Deterministic output.** Same file in → same ids out, so you can cache/upsert without churn.
+### Configure your client
 
-If you need lower-level control (streaming, footnote extraction, styling metadata), this isn't the library — reach for `pdf.js`, `mammoth`, or `unoconv` directly.
+```json
+{
+  "mcpServers": {
+    "any-extractor": {
+      "command": "npx",
+      "args": ["-y", "any-extractor-mcp"]
+    }
+  }
+}
+```
+
+To let the server read local files on the host, set the environment variable:
+
+```json
+{
+  "mcpServers": {
+    "any-extractor": {
+      "command": "npx",
+      "args": ["-y", "any-extractor-mcp"],
+      "env": { "ANY_EXTRACTOR_ALLOW_LOCAL": "1" }
+    }
+  }
+}
+```
+
+Without that flag, only HTTP(S) URLs and inline base64 `data` are accepted — a guardrail so a remote agent can't casually read arbitrary paths off your machine.
+
+### Tools
+
+| Tool                          | When to use                                                                   |
+| ----------------------------- | ----------------------------------------------------------------------------- |
+| `extract_document`            | Default. Returns compact GFM markdown + metadata + section index.             |
+| `extract_document_structured` | Returns the full typed sections/blocks tree — for agents that walk structure. |
+| `extract_section`             | Returns one section by index. Cheap way to page through large PDFs.           |
+
+All three accept the same input shape:
+
+```jsonc
+{
+  "url": "https://example.com/report.pdf", // or
+  "path": "/abs/path/to/file.docx", // (requires ANY_EXTRACTOR_ALLOW_LOCAL=1)
+  "data": "<base64>", // inline bytes
+  "maxChars": 50000, // optional output cap
+}
+```
+
+Errors (unsupported MIME, missing file, disabled local access) are returned as MCP tool errors, not thrown.
 
 ## Support
 

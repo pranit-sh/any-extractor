@@ -5,11 +5,17 @@
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
+  "bin": {
+    "any-extractor-mcp": "dist/mcp.mjs"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
       "require": "./dist/index.js"
+    },
+    "./mcp": {
+      "import": "./dist/mcp.mjs"
     }
   },
   "engines": {
@@ -52,7 +58,9 @@
     "html",
     "csv",
     "json",
-    "file-parser"
+    "file-parser",
+    "mcp",
+    "model-context-protocol"
   ],
   "author": "Pranit Deshmukh",
   "license": "MIT",
@@ -101,9 +109,11 @@
     "vitest": "^3.1.2"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "@xmldom/xmldom": "^0.9.8",
     "file-type-mime": "^0.4.6",
     "unpdf": "^1.6.2",
-    "yauzl": "^3.2.0"
+    "yauzl": "^3.2.0",
+    "zod": "^4.4.3"
   }
 }
