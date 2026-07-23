@@ -3,12 +3,70 @@ import { DOMParser } from '@xmldom/xmldom';
 import type { ExtractedFile } from './types';
 
 /** Fetch a URL and return the response body as a Buffer. */
-export async function readFileUrl(url: string): Promise<Buffer> {
-  const res = await fetch(url);
+export async function readFileUrl(url: string, signal?: AbortSignal): Promise<Buffer> {
+  const res = await fetch(url, signal ? { signal } : undefined);
   if (!res.ok) {
     throw new Error(`any-extractor: failed to fetch ${url} — ${res.status} ${res.statusText}`);
   }
   return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Throw if the signal has been aborted. Uses the signal's `reason` when
+ * present so callers see the original cancellation cause (e.g. a
+ * `TimeoutError` from `AbortSignal.timeout`).
+ */
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  throw new DOMException('The operation was aborted.', 'AbortError');
+}
+
+/**
+ * Combine a user-provided {@link AbortSignal} with an optional timeout
+ * (in milliseconds) into a single signal. Returns the original signal
+ * unchanged when no timeout is set and only one input is provided, so
+ * the fast path allocates nothing.
+ *
+ * The returned `dispose` clears any internal timer — always call it in a
+ * `finally` block to avoid leaking a `setTimeout` handle after a fast
+ * success.
+ */
+export function combineSignals(
+  signal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): { signal: AbortSignal | undefined; dispose: () => void } {
+  const hasTimeout = typeof timeoutMs === 'number' && timeoutMs > 0 && Number.isFinite(timeoutMs);
+  if (!hasTimeout) return { signal, dispose: () => {} };
+
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!signal) return { signal: timeoutSignal, dispose: () => {} };
+
+  // Node 20+ ships `AbortSignal.any`; fall back to a manual merge for older runtimes.
+  const anyFn = (AbortSignal as unknown as { any?: (signals: AbortSignal[]) => AbortSignal }).any;
+  if (typeof anyFn === 'function') {
+    return { signal: anyFn([signal, timeoutSignal]), dispose: () => {} };
+  }
+
+  const controller = new AbortController();
+  const onAbort = (source: AbortSignal) => () => {
+    if (!controller.signal.aborted) controller.abort(source.reason);
+  };
+  const a = onAbort(signal);
+  const b = onAbort(timeoutSignal);
+  if (signal.aborted) controller.abort(signal.reason);
+  else signal.addEventListener('abort', a, { once: true });
+  if (timeoutSignal.aborted) controller.abort(timeoutSignal.reason);
+  else timeoutSignal.addEventListener('abort', b, { once: true });
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      signal.removeEventListener('abort', a);
+      timeoutSignal.removeEventListener('abort', b);
+    },
+  };
 }
 
 /** Return true if the given string parses as a valid absolute URL. */

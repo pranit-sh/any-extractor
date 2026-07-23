@@ -15,4 +15,11 @@ export default defineConfig([
     sourcemap: true,
     clean: false,
   },
+  {
+    entry: { cli: 'src/cli.ts' },
+    format: ['esm'],
+    dts: false,
+    sourcemap: true,
+    clean: false,
+  },
 ]);

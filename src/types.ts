@@ -169,6 +169,25 @@ export class UnsupportedFileTypeError extends Error {
   }
 }
 
+/**
+ * Optional per-call controls. Both fields are independent — set either,
+ * both, or neither. Cancellation propagates to the initial fetch/read
+ * (URL or file), the MIME sniff, and every parser step.
+ *
+ * When both are set, whichever fires first wins; the thrown error is
+ * either the user's abort reason or a `DOMException('TimeoutError')`.
+ */
+export interface ExtractOptions {
+  /** An `AbortSignal` to cancel a running extraction. */
+  signal?: AbortSignal;
+  /**
+   * Hard timeout in milliseconds. Applies to the whole extraction —
+   * fetch/read plus parsing. Non-positive or non-finite values are
+   * treated as "no timeout".
+   */
+  timeoutMs?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Parser plugin surface — public so users can implement their own parsers
 // ---------------------------------------------------------------------------
@@ -181,6 +200,18 @@ export class UnsupportedFileTypeError extends Error {
 export interface FileParser {
   /** MIME types this parser handles. */
   readonly mimes: readonly string[];
+  /**
+   * Maximum number of concurrent {@link parse} calls the extractor may
+   * make against this parser. Only relevant when the parser is invoked
+   * via {@link ParserContext.parseImage} — container parsers (Word /
+   * PPTX / ODT) fan out embedded images in parallel, and this cap keeps
+   * that fanout friendly to downstream rate-limited services like
+   * vision LLMs or OCR APIs.
+   *
+   * Omit, set to `0`, negative, or `Infinity` for unbounded parallelism
+   * (the default).
+   */
+  readonly concurrency?: number;
   /** Parse a file buffer into sections + metadata. */
   parse(file: Buffer, context: ParserContext): Promise<ParserResult>;
 }

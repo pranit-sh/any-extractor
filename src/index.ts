@@ -1,5 +1,5 @@
 import { AnyExtractor } from './extractors/any-extractor';
-import type { ExtractResult } from './types';
+import type { ExtractOptions, ExtractResult } from './types';
 
 export { AnyExtractor } from './extractors/any-extractor';
 export { renderMarkdown, renderText, toMarkdown, toText } from './blocks';
@@ -11,6 +11,7 @@ export type {
   BlockKind,
   BlockPos,
   ExtractMetadata,
+  ExtractOptions,
   ExtractResult,
   FileParser,
   Heading,
@@ -43,7 +44,12 @@ let cached: AnyExtractor | undefined;
  * This is the zero-config entry point. Instantiate {@link AnyExtractor}
  * yourself if you want to register custom parsers via `addParser()`.
  *
+ * Pass `options.signal` to cancel a running extraction, or
+ * `options.timeoutMs` for a hard deadline. Both may be combined; the
+ * first to trigger wins.
+ *
  * @throws {UnsupportedFileTypeError} if the file's type isn't supported.
+ * @throws {DOMException} `AbortError` on cancel, `TimeoutError` on timeout.
  *
  * @example
  * ```ts
@@ -54,9 +60,14 @@ let cached: AnyExtractor | undefined;
  *
  * // Per-section rendering, on demand:
  * for (const s of sections) console.log(toMarkdown(s), toText(s));
+ *
+ * // Cancellation and timeout:
+ * const ac = new AbortController();
+ * setTimeout(() => ac.abort(), 5_000);
+ * await extract('https://example.com/big.pdf', { signal: ac.signal, timeoutMs: 10_000 });
  * ```
  */
-export function extract(input: string | Buffer): Promise<ExtractResult> {
+export function extract(input: string | Buffer, options?: ExtractOptions): Promise<ExtractResult> {
   if (!cached) cached = new AnyExtractor();
-  return cached.extract(input);
+  return cached.extract(input, options);
 }

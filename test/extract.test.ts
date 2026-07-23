@@ -829,3 +829,196 @@ describe('plain text rendering – result.text and toText', () => {
     expect(result.text).toBe('snake_case_name and 2*3*4 and file_a_b');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Per-parser concurrency
+// ---------------------------------------------------------------------------
+
+describe('FileParser.concurrency – per-parser rate cap', () => {
+  /**
+   * A slow image parser that increments a shared counter on entry,
+   * awaits a controllable deferred, and decrements on exit. The test
+   * then asserts the peak counter never exceeded the configured limit.
+   * Pass `concurrency` to declare the parser's own cap.
+   */
+  function makeInstrumentedImageParser(concurrency?: number): {
+    parser: FileParser;
+    peak: () => number;
+    release: () => void;
+  } {
+    let active = 0;
+    let peak = 0;
+    let resolveAll: (() => void) | undefined;
+    const gate = new Promise<void>((r) => {
+      resolveAll = r;
+    });
+    const parser: FileParser = {
+      mimes: ['image/png'],
+      ...(concurrency !== undefined ? { concurrency } : {}),
+      parse: async (_buf, ctx) => {
+        active++;
+        if (active > peak) peak = active;
+        await gate;
+        active--;
+        return {
+          sections: [{ kind: 'body', blocks: [ctx.block.paragraph('caption')] }],
+        };
+      },
+    };
+    return { parser, peak: () => peak, release: () => resolveAll?.() };
+  }
+
+  /** A container parser that fires N ctx.parseImage calls in parallel. */
+  function makeParallelImageContainer(count: number): FileParser {
+    return {
+      mimes: ['text/plain'],
+      parse: async (_buf, ctx) => {
+        const calls = Array.from({ length: count }, () =>
+          ctx.parseImage(Buffer.from('x'), 'image/png'),
+        );
+        const texts = await Promise.all(calls);
+        return {
+          sections: [
+            {
+              kind: 'body',
+              blocks: texts
+                .filter((t): t is string => Boolean(t))
+                .map((t) => ctx.block.paragraph(t)),
+            },
+          ],
+        };
+      },
+    };
+  }
+
+  it('caps parallel calls at the parser-declared concurrency', async () => {
+    const { parser: imageParser, peak, release } = makeInstrumentedImageParser(3);
+    const container = makeParallelImageContainer(10);
+
+    const extractor = new AnyExtractor().addParser(imageParser).addParser(container);
+    const promise = extractor.extract(Buffer.from('anything', 'utf-8'));
+
+    // Give the container parser a couple of microtask ticks to line up
+    // all 10 parseImage calls behind the semaphore.
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(peak()).toBeLessThanOrEqual(3);
+
+    release();
+    const result = await promise;
+    expect(result.sections[0].blocks).toHaveLength(10);
+    expect(peak()).toBeLessThanOrEqual(3);
+  });
+
+  it('runs unbounded when a parser does not declare concurrency', async () => {
+    const { parser: imageParser, peak, release } = makeInstrumentedImageParser();
+    const container = makeParallelImageContainer(10);
+
+    const extractor = new AnyExtractor().addParser(imageParser).addParser(container);
+    const promise = extractor.extract(Buffer.from('anything', 'utf-8'));
+
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+
+    expect(peak()).toBe(10);
+
+    release();
+    await promise;
+  });
+
+  it('treats concurrency of 0 or Infinity as unbounded', async () => {
+    for (const setting of [0, Infinity]) {
+      const { parser: imageParser, peak, release } = makeInstrumentedImageParser(setting);
+      const container = makeParallelImageContainer(10);
+
+      const extractor = new AnyExtractor().addParser(imageParser).addParser(container);
+      const promise = extractor.extract(Buffer.from('anything', 'utf-8'));
+
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+
+      expect(peak()).toBe(10);
+
+      release();
+      await promise;
+    }
+  });
+
+  it('processes every image even when N > limit (queue drains fully)', async () => {
+    // Non-blocking image parser this time so the test can complete.
+    let seen = 0;
+    const imageParser: FileParser = {
+      mimes: ['image/png'],
+      concurrency: 3,
+      parse: async (_buf, ctx) => {
+        seen++;
+        return {
+          sections: [{ kind: 'body', blocks: [ctx.block.paragraph('ok')] }],
+        };
+      },
+    };
+    const container = makeParallelImageContainer(20);
+    const extractor = new AnyExtractor().addParser(imageParser).addParser(container);
+    const result = await extractor.extract(Buffer.from('anything', 'utf-8'));
+    expect(seen).toBe(20);
+    expect(result.sections[0].blocks).toHaveLength(20);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cancellation & timeout
+// ---------------------------------------------------------------------------
+describe('extract() cancellation & timeout', () => {
+  it('rejects with AbortError when the signal is already aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      extract(Buffer.from('hello world', 'utf-8'), { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rejects mid-parse when the signal aborts', async () => {
+    const extractor = new AnyExtractor().addParser({
+      mimes: ['text/plain'],
+      parse: async (_buf, ctx) => {
+        await new Promise((r) => setTimeout(r, 30));
+        return {
+          sections: [{ kind: 'body', blocks: [ctx.block.paragraph('done')] }],
+        };
+      },
+    });
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 5);
+    await expect(
+      extractor.extract(Buffer.from('anything', 'utf-8'), { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('rejects with TimeoutError when timeoutMs elapses', async () => {
+    const extractor = new AnyExtractor().addParser({
+      mimes: ['text/plain'],
+      parse: async (_buf, ctx) => {
+        await new Promise((r) => setTimeout(r, 50));
+        return {
+          sections: [{ kind: 'body', blocks: [ctx.block.paragraph('done')] }],
+        };
+      },
+    });
+    await expect(
+      extractor.extract(Buffer.from('anything', 'utf-8'), { timeoutMs: 5 }),
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
+  });
+
+  it('completes normally when timeout is generous', async () => {
+    const result = await extract(Buffer.from('hello world', 'utf-8'), { timeoutMs: 5000 });
+    expect(result.text).toContain('hello world');
+  });
+
+  it('ignores non-positive timeoutMs values', async () => {
+    for (const timeoutMs of [0, -1, Number.NaN]) {
+      const result = await extract(Buffer.from('hi', 'utf-8'), { timeoutMs });
+      expect(result.text).toBe('hi');
+    }
+  });
+});

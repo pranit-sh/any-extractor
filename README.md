@@ -1,27 +1,89 @@
 # any-extractor
 
-> One `extract()` call. Any document. Agent-ready markdown + typed blocks + metadata.
+> One `extract()` call. Any document. Agent-ready markdown, typed blocks, and metadata.
 
 [![npm version](https://img.shields.io/npm/v/any-extractor.svg)](https://www.npmjs.com/package/any-extractor)
 [![license](https://img.shields.io/npm/l/any-extractor.svg)](./LICENSE)
 [![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
 
-`any-extractor` turns whatever file you point it at into four things:
+Point it at a file, URL, or Buffer. Get back:
 
-1. **`markdown`** — a single GFM string, rendered lazily from the blocks below and ready to hand to an LLM.
-2. **`text`** — plain reading-order text (no markdown syntax), also lazy. Useful for embeddings, search indices, TTS, or cheap token counts.
-3. **`sections`** — ordered pages / slides / sheets / body sections, each with typed blocks. The single source of truth.
-4. **`metadata`** — MIME type, title, author, page/slide counts, sheet names.
+- **`markdown`** — a single GFM string, ready for an LLM.
+- **`text`** — plain reading-order text, ready for embeddings or search.
+- **`sections`** — ordered pages / slides / sheets with typed blocks.
+- **`metadata`** — MIME, title, author, page count, sheet names.
 
-Input can be a file path, URL, or `Buffer`. MIME type is detected automatically. Custom parsers can be registered via `AnyExtractor.addParser()` to override built-ins or add new MIME handlers (see [Custom parsers](#custom-parsers)).
+```ts
+import { extract } from 'any-extractor';
 
-> **What's new in 3.0**
->
-> - Full rewrite around a five-block model (`heading`, `paragraph`, `list`, `table`, `image`) with stable content-derived ids.
-> - Blocks are the single source of truth; `result.markdown` and `result.text` render on demand (cached after first access) so the payload no longer carries duplicate copies of every paragraph. Use `toMarkdown(section)` / `toText(section)` for per-section rendering.
-> - New `AnyExtractor` class with `addParser()` — plug in your own MIME handlers (e.g. a vision LLM for images) without forking.
-> - Image parsers automatically enrich embedded images inside Word, PowerPoint, and OpenDocument files, rendered as blockquote captions in the output markdown.
-> - `UnsupportedFileTypeError` for anything without a parser, so failures are explicit.
+const result = await extract('./quarterly-report.pdf');
+
+result.markdown; // GFM string
+result.text; // plain text
+result.sections; // typed blocks
+result.metadata; // { mime, title, pageCount, ... }
+```
+
+<details>
+<summary>Response</summary>
+
+**`result.markdown`**
+
+```markdown
+# Q3 Results
+
+Revenue grew **18%** year-over-year, driven by APAC.
+
+| Region | Revenue |
+| ------ | ------- |
+| APAC   | $4.2M   |
+| EMEA   | $3.1M   |
+```
+
+**`result.sections`**
+
+```ts
+[
+  {
+    kind: 'page',
+    label: 'Page 1',
+    index: 1,
+    blocks: [
+      { id: 'a1b2…', type: 'heading', level: 1, text: 'Q3 Results' },
+      {
+        id: 'c3d4…',
+        type: 'paragraph',
+        text: 'Revenue grew **18%** year-over-year, driven by APAC.',
+      },
+      {
+        id: 'e5f6…',
+        type: 'table',
+        headers: ['Region', 'Revenue'],
+        rows: [
+          ['APAC', '$4.2M'],
+          ['EMEA', '$3.1M'],
+        ],
+      },
+    ],
+  },
+];
+```
+
+**`result.metadata`**
+
+```ts
+{
+  mime: 'application/pdf',
+  source: './quarterly-report.pdf',
+  title: 'Q3 Results',
+  author: 'Finance Team',
+  pageCount: 42,
+}
+```
+
+</details>
+
+---
 
 ## Install
 
@@ -29,161 +91,81 @@ Input can be a file path, URL, or `Buffer`. MIME type is detected automatically.
 npm install any-extractor
 ```
 
-Requires Node.js ≥ 18. Ships with ESM + CJS + `.d.ts`.
+Node.js ≥ 18.
 
-## Quick start
+---
 
-```ts
-import { extract } from 'any-extractor';
+## MCP Server
 
-// Path, URL, or Buffer — the extractor sniffs the MIME type itself.
-const result = await extract('./quarterly-report.pdf');
+`any-extractor` doubles as a [Model Context Protocol](https://modelcontextprotocol.io) server. Drop it into Claude Desktop, Cursor, VS Code, Continue, or any MCP-capable agent.
 
-console.log(result.metadata.pageCount); // 42
-console.log(result.markdown.slice(0, 200)); // GFM
-console.log(result.text.slice(0, 200)); // plain text, no markdown syntax
-
-for (const section of result.sections) {
-  console.log(section.kind, section.label); // "page", "Page 3"
-  for (const block of section.blocks) {
-    if (block.type === 'heading') console.log('#'.repeat(block.level), block.text);
-  }
+```jsonc
+{
+  "mcpServers": {
+    "any-extractor": {
+      "command": "npx",
+      "args": ["-y", "any-extractor-mcp"],
+    },
+  },
 }
 ```
+
+| Tool                          | Use it for                                                    |
+| ----------------------------- | ------------------------------------------------------------- |
+| `extract_document`            | Default. Markdown + metadata + section index.                 |
+| `extract_document_structured` | Full typed section/block tree — for agents that walk content. |
+| `extract_section`             | One section by index. Cheap paging for large PDFs.            |
+
+---
 
 ## Supported formats
 
-| Format       | MIME                                                                        | Sections emitted           |
-| ------------ | --------------------------------------------------------------------------- | -------------------------- |
-| PDF          | `application/pdf`                                                           | one `page` per page        |
-| Word         | `application/vnd.openxmlformats-officedocument.wordprocessingml.document`   | single `body`              |
-| Excel        | `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`         | one `sheet` per worksheet  |
-| PowerPoint   | `application/vnd.openxmlformats-officedocument.presentationml.presentation` | one `slide` per slide      |
-| OpenDocument | `application/vnd.oasis.opendocument.{text,spreadsheet,presentation}`        | `body` / `sheet` / `slide` |
-| HTML         | `text/html`                                                                 | single `body`              |
-| Markdown     | `text/markdown`                                                             | single `body`              |
-| Plain text   | `text/plain`                                                                | single `body`              |
-| CSV          | `text/csv`                                                                  | single `body` (one table)  |
-| JSON         | `application/json`                                                          | single `body`              |
+| Format       | Sections emitted           |
+| ------------ | -------------------------- |
+| PDF          | one `page` per page        |
+| Word         | single `body`              |
+| Excel        | one `sheet` per worksheet  |
+| PowerPoint   | one `slide` per slide      |
+| OpenDocument | `body` / `sheet` / `slide` |
+| HTML         | single `body`              |
+| Markdown     | single `body`              |
+| Plain text   | single `body`              |
+| CSV          | single `body`              |
+| JSON         | single `body`              |
 
-## The result shape
+---
 
-```ts
-interface ExtractResult {
-  /** Full document as GFM. Rendered on first access, cached thereafter. */
-  readonly markdown: string;
-  /** Full document as plain text — no markdown syntax. Lazy and cached. */
-  readonly text: string;
-  sections: Section[];
-  metadata: ExtractMetadata;
-}
+## CLI
 
-interface Section {
-  kind: 'body' | 'page' | 'slide' | 'sheet';
-  label?: string; // e.g. "Page 3", "Slide 2", "Q1 Sales"
-  index?: number; // 1-based within its kind
-  blocks: Block[]; // structured content — the source of truth
-}
+```bash
+# Markdown to stdout (default)
+npx any-extractor report.pdf
 
-interface ExtractMetadata {
-  mime: string;
-  source?: string; // file path, URL, or "buffer"
-  title?: string;
-  author?: string;
-  pageCount?: number; // PDF
-  slideCount?: number; // PPTX / ODP
-  sheetNames?: string[]; // XLSX / ODS
-}
+# Everything else — flags, formats, URLs, stdin, timeouts
+npx any-extractor --help
 ```
 
-`Section` does not carry a rendered markdown/text string — that would duplicate every paragraph in memory and on the wire. Render on demand:
+---
+
+## Programmatic API
+
+### Cancellation & timeouts
 
 ```ts
-import { extract, toMarkdown, toText } from 'any-extractor';
+// User-driven cancel
+const ac = new AbortController();
+await extract('./big.pdf', { signal: ac.signal });
 
-const result = await extract('./report.pdf');
+// Hard deadline
+await extract(url, { timeoutMs: 10_000 });
 
-// Full document, in either form (lazy, cached):
-console.log(result.markdown);
-console.log(result.text);
-
-// Per section, only when you need it:
-for (const section of result.sections) {
-  console.log(toMarkdown(section));
-  console.log(toText(section));
-}
+// Both — whichever fires first wins
+await extract(url, { signal: ac.signal, timeoutMs: 30_000 });
 ```
 
-### Markdown vs. plain text
+### Custom parsers
 
-| Output            | What you get                                                          | Good for                                                   |
-| ----------------- | --------------------------------------------------------------------- | ---------------------------------------------------------- |
-| `result.markdown` | GFM: headings, lists, tables, blockquote captions, inline `**` / `*`. | LLM prompts, human review, anything that renders markdown. |
-| `result.text`     | Reading-order text. Bullets, pipes, and inline syntax stripped.       | Embeddings, keyword search, TTS, cheap token counts.       |
-
-Rules for the plain-text render (deterministic, no third-party dependencies):
-
-- Headings appear as bare lines.
-- Paragraphs and list items have inline markdown (`**bold**`, `*italic*`, `` `code` ``, `[label](url)`) stripped to their visible characters. Word-internal underscores (`snake_case`) are left alone.
-- Lists are one item per line, no bullet or number.
-- Tables become tab-separated rows (headers first, when present). Newlines inside cells are collapsed to spaces so each row stays on one line.
-- Images render as their `alt` (or parser-supplied `text`) if any; empty images produce no output.
-- Blocks are separated by a blank line; sections by two blank lines (no `---` divider).
-
-## The block model
-
-Five block types.
-
-```ts
-type Block = Heading | Paragraph | List | Table | Image;
-
-interface BlockBase {
-  id: string; // stable, content-derived hash
-  page?: number; // 1-based, when known
-  sectionPath?: string[]; // heading breadcrumb, e.g. ["Chapter 2", "Results"]
-}
-
-interface Heading extends BlockBase {
-  type: 'heading';
-  level: 1 | 2 | 3 | 4 | 5 | 6;
-  text: string;
-}
-interface Paragraph extends BlockBase {
-  type: 'paragraph';
-  text: string;
-} // inline GFM
-interface List extends BlockBase {
-  type: 'list';
-  ordered: boolean;
-  items: string[];
-}
-interface Table extends BlockBase {
-  type: 'table';
-  headers?: string[];
-  rows: string[][];
-}
-interface Image extends BlockBase {
-  type: 'image';
-  mime: string;
-  path?: string;
-  bytes: number;
-  alt?: string;
-  text?: string; // populated when a custom image parser is registered
-}
-```
-
-Notes:
-
-- **Paragraph `text` is inline markdown.** Bold, italic, code, and links are baked in as GFM syntax — you don't get separate "run" objects to walk.
-- **List items are strings.** Same rule: inline markdown baked in. Nested lists are flattened.
-- **Tables fan out merged cells.** If a `.xlsx` cell spans A1:B2 with the value `Total`, all four positions in `rows` will contain `Total`. Retrieval over rows never sees empty holes.
-- **Images are metadata-only by default.** No bytes, no base64 — just MIME, path in the container, size, and (when available) alt text. Register a custom image parser (see below) and every embedded image gets a `text` field with the parser's output.
-- **`sectionPath`** is the heading breadcrumb the block sits under, so an LLM can cite `Chapter 2 › Results` without you re-computing it.
-- **`id`** is a deterministic SHA-1 of the block's content + position, so re-running extraction produces the same ids.
-
-## Custom parsers
-
-Zero-config `extract()` covers every supported format out of the box. When you want to override a MIME (e.g. run images through a vision LLM, or use your own PDF parser), use the `AnyExtractor` class and call `addParser()`:
+Register your own MIME handler — e.g. route images through a vision LLM. User parsers override built-ins, and embedded images inside Word / PowerPoint / OpenDocument get enriched automatically.
 
 ```ts
 import { AnyExtractor } from 'any-extractor';
@@ -192,98 +174,27 @@ const extractor = new AnyExtractor();
 
 extractor.addParser({
   mimes: ['image/png', 'image/jpeg'],
+  concurrency: 2, // rate-limit in-flight calls
   async parse(buffer, ctx) {
-    const caption = await myVisionModel(buffer); // your call
+    const caption = await myVisionModel(buffer);
     return {
-      sections: [
-        {
-          kind: 'body',
-          blocks: [ctx.block.paragraph(caption)],
-        },
-      ],
+      sections: [{ kind: 'body', blocks: [ctx.block.paragraph(caption)] }],
     };
   },
 });
 
-const result = await extractor.extract('./slides.pptx');
+await extractor.extract('./slides.pptx');
 ```
 
-Once a parser is registered:
+Enriched images render with a blockquote caption in the output markdown:
 
-- Direct calls like `extractor.extract('./photo.png')` route to your parser.
-- **User parsers override built-ins** for the same MIME.
-- **Embedded images inside Word, PowerPoint, and OpenDocument files are enriched.** Every image block gets a `text` field with your parser's output, and its markdown rendering picks up a blockquote caption:
+```markdown
+![Sales chart](media/image1.png)
 
-  ```markdown
-  ![Sales chart](media/image1.png)
-
-  > Bar chart showing Q3 revenue up 18% vs. Q2, driven by APAC.
-  ```
-
-The `ctx` handed to your parser gives you the same building blocks the built-in parsers use:
-
-```ts
-interface ParserContext {
-  block: BlockFactory; // ctx.block.heading, .paragraph, .list, .table, .image
-  parseImage(bytes: Buffer, mime: string): Promise<string | undefined>;
-}
+> Bar chart showing Q3 revenue up 18% vs. Q2, driven by APAC.
 ```
 
-## Errors
-
-```ts
-import { extract, AnyExtractor, UnsupportedFileTypeError } from 'any-extractor';
-
-try {
-  await extract('./mystery.bin');
-} catch (err) {
-  if (err instanceof UnsupportedFileTypeError) {
-    console.log(err.mime); // the sniffed MIME that had no parser
-  }
-}
-```
-
-`UnsupportedFileTypeError` is thrown when no built-in or user-registered parser matches the sniffed MIME. Add a matching parser via `new AnyExtractor().addParser({ mimes: [...], parse })` to handle it.
-
-## MCP server
-
-`any-extractor` also ships as a [Model Context Protocol](https://modelcontextprotocol.io) server, so agents in Claude Desktop, Cursor, VS Code, Continue, or any other MCP-capable client can extract documents directly — no glue code, no shell-outs.
-
-### Configure your client
-
-```json
-{
-  "mcpServers": {
-    "any-extractor": {
-      "command": "npx",
-      "args": ["-y", "any-extractor-mcp"]
-    }
-  }
-}
-```
-
-The server inherits the ambient authority of the client that spawns it — it can read any file the launching process can read. That's the same model as every other stdio MCP server (filesystem, git, etc.). Operators who need to sandbox it should do so at the process level.
-
-### Tools
-
-| Tool                          | When to use                                                                   |
-| ----------------------------- | ----------------------------------------------------------------------------- |
-| `extract_document`            | Default. Returns compact GFM markdown + metadata + section index.             |
-| `extract_document_structured` | Returns the full typed sections/blocks tree — for agents that walk structure. |
-| `extract_section`             | Returns one section by index. Cheap way to page through large PDFs.           |
-
-All three accept the same input shape:
-
-```jsonc
-{
-  "url": "https://example.com/report.pdf", // remote fetch
-  "path": "/abs/path/to/file.docx", // local file
-  "data": "<base64>", // inline bytes
-  "maxChars": 50000, // optional output cap
-}
-```
-
-Errors (unsupported MIME, missing file, invalid URL) are returned as MCP tool errors, not thrown.
+---
 
 ## Support
 
