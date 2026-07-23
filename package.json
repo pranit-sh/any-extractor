@@ -90,18 +90,18 @@
     "@types/yauzl": "^2.10.3",
     "@typescript-eslint/eslint-plugin": "^8.31.0",
     "@typescript-eslint/parser": "^8.31.0",
-    "@vitest/coverage-v8": "^3.1.2",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^9.25.1",
     "eslint-config-prettier": "^10.1.2",
     "eslint-plugin-node": "^11.1.0",
     "eslint-plugin-prettier": "^5.2.6",
     "husky": "^8.0.3",
-    "lint-staged": "^15.5.1",
+    "lint-staged": "^17.1.0",
     "prettier": "^3.5.3",
     "ts-node": "^10.9.2",
     "tsup": "^8.4.0",
     "typescript": "^5.8.3",
-    "vitest": "^3.1.2"
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
