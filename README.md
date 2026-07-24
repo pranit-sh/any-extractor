@@ -5,6 +5,7 @@
 [![npm version](https://img.shields.io/npm/v/any-extractor.svg)](https://www.npmjs.com/package/any-extractor)
 [![license](https://img.shields.io/npm/l/any-extractor.svg)](./LICENSE)
 [![Downloads](https://img.shields.io/npm/dm/any-extractor)](https://www.npmjs.com/package/any-extractor)
+[![Issues](https://img.shields.io/github/issues/pranit-sh/any-extractor.svg)](https://github.com/pranit-sh/any-extractor/issues)
 
 Point it at a file, URL, or Buffer. Get back:
 
@@ -195,6 +196,10 @@ Enriched images render with a blockquote caption in the output markdown:
 ```
 
 ---
+
+## Issues & feature requests
+
+Found a bug or want a new feature? **[Open an issue on GitHub](https://github.com/pranit-sh/any-extractor/issues/new/choose)**.
 
 ## Support
 

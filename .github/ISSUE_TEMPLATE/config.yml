@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Question or discussion
+    url: https://github.com/pranit-sh/any-extractor/discussions
+    about: Ask questions, share ideas, or get help using any-extractor.
+  - name: ☕ Support the project
+    url: https://www.buymeacoffee.com/pranit.sh
+    about: If any-extractor saved you time, you can buy me a coffee.

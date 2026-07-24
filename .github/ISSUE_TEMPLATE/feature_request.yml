@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a new format, option, or API for any-extractor.
+title: '[Feature]: '
+labels: ['enhancement']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the use case — what document, what agent, what output you need.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What API, flag, or behavior would you like to see?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds you've tried or other libraries that do this well.
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Additional context
